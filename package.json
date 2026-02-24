@@ -1,0 +1,25 @@
+{
+  "name": "obsidian-crdt-coeditor",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Real-time collaborative editing for Obsidian via Yjs CRDTs with LLM agent co-editing via MCP",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:server": "pnpm --filter server dev",
+    "dev:plugin": "pnpm --filter plugin dev",
+    "dev:sidecar": "pnpm --filter sidecar dev"
+  },
+  "workspaces": [
+    "plugin",
+    "server",
+    "sidecar"
+  ],
+  "overrides": {
+    "yjs": "^13.6.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "yjs": "^13.6.0"
+    }
+  }
+}

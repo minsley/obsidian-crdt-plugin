@@ -1,0 +1,21 @@
+node_modules/
+dist/
+
+# Plugin build artifacts in test vault
+test-vault/.obsidian/plugins/obsidian-crdt-coeditor/main.js
+test-vault/.obsidian/plugins/obsidian-crdt-coeditor/styles.css
+
+# Yjs state files
+test-vault/**/*.yjs
+test-vault/.md_crdt/
+
+# LevelDB data
+.leveldb/
+server/.leveldb/
+
+# Env
+.env
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+{
+  "name": "plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Obsidian CRDT co-editor plugin",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch"
+  },
+  "dependencies": {
+    "yjs": "^13.6.0",
+    "y-websocket": "^2.0.0",
+    "y-codemirror.next": "^0.3.5"
+  },
+  "devDependencies": {
+    "obsidian": "^1.5.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0"
+  }
+}
