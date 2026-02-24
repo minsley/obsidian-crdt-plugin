@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-crdt-coeditor",
+  "name": "CRDT Co-Editor",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Real-time collaborative editing via Yjs CRDTs with LLM agent co-editing support",
+  "author": "obsidian-crdt-coeditor",
+  "isDesktopOnly": true
+}

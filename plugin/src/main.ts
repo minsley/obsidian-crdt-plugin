@@ -1,6 +1,7 @@
 import { Plugin, TFile, MarkdownView } from "obsidian";
 import { CRDTSession } from "./session";
 import { createCollabExtension } from "./cm-extension";
+import { log, warn, setDebug } from "./log";
 import {
   CRDTCoEditorSettings,
   CRDTCoEditorSettingTab,
@@ -13,6 +14,8 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
+    setDebug(this.settings.debugLogging);
+    log("Plugin loaded");
     this.addSettingTab(new CRDTCoEditorSettingTab(this.app, this));
 
     // Register the CM6 collab extension (shared across all editors)
@@ -27,16 +30,21 @@ export default class CRDTCoEditorPlugin extends Plugin {
       })
     );
 
-    // Watch for external file modifications
+    // Watch for external file modifications.
+    // Compare file content against Y.Text to distinguish real external edits
+    // from Obsidian's own auto-save (which writes editor content back to disk).
     this.registerEvent(
-      this.app.vault.on("modify", (file) => {
+      this.app.vault.on("modify", async (file) => {
         if (file instanceof TFile) {
           const session = this.sessions.get(file.path);
           if (session && !session.isSelfWrite) {
-            console.warn(
-              `[crdt-coeditor] External modification detected for ${file.path}. ` +
-                `Yjs state is authoritative — external change ignored.`
-            );
+            const diskContent = await this.app.vault.read(file);
+            const ytextContent = session.ytext.toString();
+            if (diskContent !== ytextContent) {
+              warn(
+                `External modification detected for ${file.path} — Yjs state is authoritative.`
+              );
+            }
           }
         }
       })
@@ -103,6 +111,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
   }
 
   async saveSettings() {
+    setDebug(this.settings.debugLogging);
     await this.saveData(this.settings);
   }
 }

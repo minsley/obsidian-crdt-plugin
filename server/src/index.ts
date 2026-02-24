@@ -1,11 +1,16 @@
 import http from "node:http";
 import { WebSocketServer } from "ws";
-// @ts-expect-error - y-websocket/bin/utils has no type declarations
-import { setupWSConnection, setPersistence } from "y-websocket/bin/utils";
-import { LeveldbPersistence } from "y-leveldb";
 import { loadConfig } from "./config.js";
 
 const config = loadConfig();
+
+// Set YPERSISTENCE env var BEFORE importing y-websocket/bin/utils.
+// This tells y-websocket to use its own built-in LevelDB persistence,
+// which avoids the duplicate yjs issue that breaks custom setPersistence.
+process.env.YPERSISTENCE = config.leveldbPath;
+
+// @ts-expect-error - y-websocket/bin/utils has no type declarations
+const { setupWSConnection } = await import("y-websocket/bin/utils");
 
 // --- Room Registry ---
 // Tracks active rooms so the sidecar can query them via HTTP.
@@ -18,7 +23,6 @@ function addClient(room: string) {
 function removeClient(room: string) {
   const count = (activeRooms.get(room) || 1) - 1;
   if (count <= 0) {
-    // Grace period: keep room listed for 5s after last client disconnects
     setTimeout(() => {
       if ((activeRooms.get(room) || 0) <= 0) {
         activeRooms.delete(room);
@@ -29,30 +33,6 @@ function removeClient(room: string) {
     activeRooms.set(room, count);
   }
 }
-
-// --- LevelDB Persistence ---
-const ldb = new LeveldbPersistence(config.leveldbPath);
-
-setPersistence({
-  provider: ldb,
-  bindState: async (docName: string, ydoc: any) => {
-    const persistedYdoc = await ldb.getYDoc(docName);
-    const newUpdates = (ydoc as any).constructor.encodeStateAsUpdate(ydoc);
-    ldb.storeUpdate(docName, newUpdates);
-
-    const persistedState = (ydoc as any).constructor.encodeStateAsUpdate(
-      persistedYdoc
-    );
-    (ydoc as any).constructor.applyUpdate(ydoc, persistedState);
-
-    ydoc.on("update", (update: Uint8Array) => {
-      ldb.storeUpdate(docName, update);
-    });
-  },
-  writeState: async (_docName: string, _ydoc: any) => {
-    // State is continuously written via the update handler above
-  },
-});
 
 // --- HTTP + WebSocket Server ---
 const httpServer = http.createServer((req, res) => {

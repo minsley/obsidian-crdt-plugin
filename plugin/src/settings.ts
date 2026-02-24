@@ -5,12 +5,14 @@ export interface CRDTCoEditorSettings {
   serverUrl: string;
   userName: string;
   userColor: string;
+  debugLogging: boolean;
 }
 
 export const DEFAULT_SETTINGS: CRDTCoEditorSettings = {
   serverUrl: "ws://localhost:1234",
   userName: "Anonymous",
   userColor: "#3B82F6",
+  debugLogging: false,
 };
 
 export class CRDTCoEditorSettingTab extends PluginSettingTab {
@@ -60,6 +62,18 @@ export class CRDTCoEditorSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.userColor)
           .onChange(async (value) => {
             this.plugin.settings.userColor = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Debug logging")
+      .setDesc("Log verbose CRDT lifecycle events to the developer console")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.debugLogging)
+          .onChange(async (value) => {
+            this.plugin.settings.debugLogging = value;
             await this.plugin.saveSettings();
           })
       );

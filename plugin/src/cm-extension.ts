@@ -2,22 +2,13 @@ import { ViewPlugin, ViewUpdate, EditorView, keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
+import { debug } from "./log";
 import type CRDTCoEditorPlugin from "./main";
+import type { CRDTSession } from "./session";
 
 /**
  * CM6 extension that dynamically binds the correct Y.Text per editor view
  * using a Compartment for clean attach/detach.
- *
- * How it works:
- * - A Compartment holds the yCollab extensions (or empty [] when no session).
- * - A ViewPlugin watches which file this EditorView belongs to.
- * - When the file changes or a session becomes available, it reconfigures
- *   the compartment with fresh yCollab extensions.
- * - On detach, it reconfigures the compartment to [] which triggers
- *   destroy() on the yCollab ViewPlugins, cleaning up Y.Text observers.
- *
- * The UndoManager is created per-session and scoped to local changes only
- * (yCollab handles this internally by tracking the YSyncConfig as origin).
  */
 export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
   const compartment = new Compartment();
@@ -28,14 +19,11 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
       private checkPending = false;
 
       constructor(private view: EditorView) {
-        // Defer initial attach to next microtask so the compartment
-        // has been added to the editor state first.
+        debug("[cm] ViewPlugin created");
         queueMicrotask(() => this.syncSession());
       }
 
       update(_update: ViewUpdate) {
-        // Check if the file this editor is showing has changed.
-        // Obsidian can reuse an editor leaf for a different file.
         if (!this.checkPending) {
           this.checkPending = true;
           queueMicrotask(() => {
@@ -49,17 +37,17 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
         const filePath = this.resolveFilePath();
 
         if (filePath === this.currentPath) {
-          // Path unchanged — but session might have been created since last check
           if (filePath && !this.hasActiveCollab()) {
             const session = plugin.sessions.get(filePath);
             if (session) {
-              this.attachSession(session, filePath);
+              debug(`[cm] found new session for ${filePath}`);
+              this.waitAndAttach(session, filePath);
             }
           }
           return;
         }
 
-        // File changed — detach old, maybe attach new
+        debug(`[cm] path changed: ${this.currentPath} → ${filePath}`);
         this.currentPath = filePath;
 
         if (!filePath) {
@@ -69,10 +57,19 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
 
         const session = plugin.sessions.get(filePath);
         if (session) {
-          this.attachSession(session, filePath);
+          this.waitAndAttach(session, filePath);
         } else {
           this.detach();
         }
+      }
+
+      private waitAndAttach(session: CRDTSession, filePath: string) {
+        debug(`[cm] waitAndAttach(${filePath})`);
+        session.whenReady.then(() => {
+          if (this.currentPath === filePath && !this.hasActiveCollab()) {
+            this.attachSession(session, filePath);
+          }
+        });
       }
 
       private resolveFilePath(): string | null {
@@ -90,7 +87,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
 
       private attachSession(
         session: { ytext: Y.Text; provider: { awareness: any } },
-        _filePath: string
+        filePath: string
       ) {
         const undoManager = new Y.UndoManager(session.ytext);
         const extensions = [
@@ -100,15 +97,32 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
           keymap.of(yUndoManagerKeymap),
         ];
 
+        const ytextContent = session.ytext.toString();
+        const editorContent = this.view.state.doc.toString();
+        debug(
+          `[cm] attachSession(${filePath}): ytext=${ytextContent.length}, editor=${editorContent.length}, match=${editorContent === ytextContent}`
+        );
+
+        if (editorContent !== ytextContent) {
+          debug(`[cm] replacing editor content with ytext`);
+          this.view.dispatch({
+            changes: {
+              from: 0,
+              to: editorContent.length,
+              insert: ytextContent,
+            },
+          });
+        }
+
         this.view.dispatch({
           effects: compartment.reconfigure(extensions),
         });
+        debug(`[cm] yCollab attached for ${filePath}`);
       }
 
       private detach() {
-        // Reconfigure to empty — this destroys the yCollab ViewPlugins,
-        // which call their destroy() methods and unobserve Y.Text.
         if (this.hasActiveCollab()) {
+          debug("[cm] detaching yCollab");
           this.view.dispatch({
             effects: compartment.reconfigure([]),
           });
@@ -116,18 +130,17 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
       }
 
       private hasActiveCollab(): boolean {
-        // Check if the compartment currently has non-empty content
-        return compartment.get(this.view.state) !== undefined;
+        const value = compartment.get(this.view.state);
+        // compartment.of([]) initializes with an empty array, so we need
+        // to check length — an empty array means no yCollab is attached.
+        return Array.isArray(value) ? value.length > 0 : value !== undefined;
       }
 
       destroy() {
-        // ViewPlugin is being destroyed (editor closing)
-        // No explicit detach needed — CM6 will destroy the compartment contents
+        debug("[cm] ViewPlugin destroyed");
       }
     }
   );
 
-  // Return both the compartment (initially empty) and the watcher plugin.
-  // registerEditorExtension gets this array, so every new editor gets both.
   return [compartment.of([]), watcherPlugin];
 }
