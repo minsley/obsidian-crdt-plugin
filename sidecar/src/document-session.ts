@@ -109,7 +109,16 @@ export class AgentDocumentSession {
     this.setPresence(len + text.length);
   }
 
+  /**
+   * Update awareness cursor position using Yjs relative positions.
+   * yRemoteSelections in y-codemirror.next expects { anchor, head } as
+   * RelativePosition objects, not absolute indices.
+   */
   setPresence(cursor: number): void {
-    this.awareness.setLocalStateField("cursor", { index: cursor });
+    const pos = Y.createRelativePositionFromTypeIndex(this.ytext, cursor);
+    this.awareness.setLocalStateField("cursor", {
+      anchor: pos,
+      head: pos,
+    });
   }
 }

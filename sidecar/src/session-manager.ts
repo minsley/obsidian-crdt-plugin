@@ -44,10 +44,12 @@ export class SessionManager {
       ydoc
     );
 
-    // Set awareness to identify as an agent
+    // Set awareness to identify as an agent.
+    // color is used for the caret, colorLight for selection background.
     provider.awareness.setLocalStateField("user", {
       name: "Claude Agent",
       color: "#8B5CF6",
+      colorLight: "#8B5CF633",
     });
 
     // Wait for initial sync
