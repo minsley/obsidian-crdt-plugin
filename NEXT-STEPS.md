@@ -1,134 +1,134 @@
 # Next Steps
 
-Current state: M1 code is written and builds. No manual testing has been done yet.
+## What's done
 
-## Immediate: M1 validation
+- **M1: Core CRDT sync** — Y.Text ↔ CM6 binding via Compartment, 3-case bootstrap (server state / local .yjs / seed from .md), debounced .md export, split-pane support.
+- **M2: Embedded server** — plugin spawns y-websocket + LevelDB server as a child process via `ELECTRON_RUN_AS_NODE`. Room code registry (`adjective-noun-NN`) for session sharing. REST endpoints for room management.
+- **M3: MCP sidecar** — 8 MCP tools (connect, read, replace, insert-after-heading, insert-after-pattern, append, disconnect, list-rooms). Claude Desktop connects, edits render in real-time with a labeled purple cursor using Yjs relative positions.
+- **Multi-user collab** — ribbon icon toggles hosting, command palette for join. Tested with 3 concurrent peers (1 host + 2 joiners).
+- **Debug logging** — toggleable via plugin settings, shared logger module.
 
-These should be done before writing any more code.
+## Polish Hitlist
 
-### 1. Manual smoke test
+### P0: Bugs / Correctness
 
-Start the server, open the test vault in Obsidian, enable the plugin, and open a note. Verify:
+- [ ] **collabActive flag set before server starts** — `startCollab()` should only set `collabActive = true` after `serverManager.start()` succeeds. Same issue in `showJoinModal()`.
+- [ ] **Port-in-use handling** — if the port is already bound, the child process dies silently and we wait 5s for a health check timeout. Detect EADDRINUSE from child stderr and fail fast.
+- [ ] **Restart race condition** — rapid stop→start could bind the same port before the old process exits. Add cooldown or wait for proc exit.
+- [ ] **Flush pending writes on shutdown** — `stopCollab()` and `onunload()` should flush debounced `writeMarkdownFile()` calls before destroying sessions.
+- [ ] **Persistence error handling** — `saveYjsState()` has no try/catch; `loadYjsState()` swallows real I/O failures.
 
-- [ ] Plugin connects to `ws://localhost:1234` without errors (check Obsidian dev console)
-- [ ] Typing produces Yjs updates (server should log connections)
-- [ ] The `.md` file updates after the 1s debounce
-- [ ] A `.md_crdt/` directory is created with `.yjs` state files
-- [ ] Closing and reopening a note loads from Yjs state (not re-seeding from `.md`)
-- [ ] Opening `Scratch.md` (empty file) doesn't throw
+### P1: Robustness
 
-### 2. CM6 Compartment binding
+- [ ] **WebSocket disconnect handling** — `provider.on("status")` to surface disconnection in status bar + Notice. y-websocket reconnects automatically but the user should know.
+- [ ] **Connection status in status bar** — show "Connecting...", "Disconnected (retrying)", etc. instead of just "Active".
+- [ ] **Room code validation** — reject empty/whitespace `roomName` in POST /rooms/create.
+- [ ] **Settings validation** — validate color as `#RRGGBB`, host as IP/hostname, port range 1024–65535.
+- [ ] **Server crash recovery** — if child process exits unexpectedly, offer to restart via Notice.
 
-The rewritten `cm-extension.ts` uses a Compartment with a watcher ViewPlugin. This is the highest-risk piece. During the smoke test, verify:
+### P2: UX Improvements
 
-- [ ] The yCollab binding attaches when a note is opened (cursor blinking, typing works)
-- [ ] Switching between notes detaches the old binding and attaches the new one
-- [ ] Opening two notes in split panes binds each to the correct Y.Text
-- [ ] No "Y.Text already bound" errors in console
+- [ ] **Remote cursor CSS** — add `styles.css` with proper `.cm-ySelectionCaret` / `.cm-ySelectionInfo` styling.
+- [ ] **Collab indicator per file** — icon in file explorer or tab for files with active CRDT sessions.
+- [ ] **"Who's here" panel** — list of connected users + colors from awareness state.
+- [ ] **Join modal remembers last connection** — save recent `{ url, code }` pairs in settings.
+- [ ] **Keyboard shortcut for toggle** — bind a hotkey to start/stop collab.
+- [ ] **Notification when peer joins/leaves** — Notice on awareness changes.
 
-If the `resolveFilePath()` approach (iterating markdown leaves and comparing `cm` references) doesn't work reliably in Obsidian's internal structure, fallback options:
+### P3: Automated Testing
 
-- Use `EditorView.state.field()` to stash the file path as a custom StateField
-- Hook into Obsidian's `MarkdownView` lifecycle more directly
+- [ ] **Unit tests: AgentDocumentSession** — replace, insertAfterPattern, insertAfterHeading, append. Pure Yjs, no network.
+- [ ] **Unit tests: RoomCodeRegistry** — create, lookup, remove, duplicate create.
+- [ ] **Unit tests: bootstrap ordering** — mock vault + Y.Doc, all 3 cases, verify `whenReady` resolves.
+- [ ] **Integration test: two-client sync** — server + two WebsocketProviders, verify cross-client edits.
+- [ ] **Integration test: MCP tools** — sidecar + server, call tools, verify edits appear in second client.
+- [ ] **Test harness** — vitest, shared fixtures for Y.Doc and server lifecycle.
 
-### 3. Bootstrap ordering
+---
 
-Test the three bootstrap paths:
+## Feature Roadmap
 
-- [ ] Fresh file (no server state, no `.yjs`): content seeded from `.md`
-- [ ] Server has state (restart Obsidian but not the server): content loaded from server
-- [ ] Server down, local `.yjs` exists: content loaded from `.yjs` file
+### F1: Presence & Identity
 
-### 4. Self-write guard
+Each collaborator is visually distinct and identifiable.
 
-- [ ] Edit a note, wait for debounce, check that no "External modification detected" warning appears in console
-- [ ] Edit the `.md` file externally (e.g. `echo "test" >> file.md`) and verify the warning does appear
+- [ ] **Per-user cursor colors** — hash username to derive color, or host assigns from a palette on join.
+- [ ] **Per-user selection highlights** — ensure each user sets `colorLight` matching their cursor color. Currently only sidecar sets it.
+- [ ] **Username labels on cursors** — y-codemirror.next renders on hover via `.cm-ySelectionInfo`. Consider always-visible or fade-after-move.
+- [ ] **"Who's here" sidebar** — panel or status bar popover listing users, colors, and current file. Built from awareness state.
+- [ ] **User avatars** — stretch. Initials circle or gravatar next to cursor labels.
 
-## M2: Multi-user co-editing
+### F2: Networking & Access Control
 
-### 5. Awareness / cursor presence
+Move beyond localhost to support remote collaboration with identity.
 
-`yCollab` includes `yRemoteSelections` which renders remote cursors when awareness is passed. To test this without the sidecar:
+- [ ] **Relay server deployment** — Docker image or one-click deploy (Fly.io / Railway).
+- [ ] **TLS support** — `wss://` via reverse proxy (Caddy/nginx) or native TLS.
+- [ ] **Token-based auth** — server generates session token on host start. Embedded in room code or shared separately.
+- [ ] **Email-based invitations** — generate invite links with server URL + room code + token.
+- [ ] **Invite by username** — user registry, push notifications for pending invites.
+- [ ] **Access levels** — read-only vs read-write, enforced server-side.
+- [ ] **Persistent room metadata** — survive server restarts for long-lived sessions.
 
-- Write a small Node script (`test-scripts/fake-peer.ts`) that connects to a room via `y-websocket`, sets awareness state with a fake user, and moves the cursor position on an interval. Verify the cursor appears in Obsidian.
+### F3: Claude Integration
 
-The standalone `awareness.ts` module is available if the built-in rendering needs customization (e.g. always-visible labels instead of hover-only).
+Make Claude a first-class collaborator.
 
-### 6. Session lifecycle hardening
+**Inviting Claude:**
+- [ ] **"Invite Claude" command** — trigger sidecar to connect to the current room from within Obsidian.
+- [ ] **Auto-connect sidecar on collab start** — settings toggle to launch sidecar automatically.
 
-- Test rapid file switching (click through many notes quickly)
-- Test opening/closing split panes
-- Test plugin disable/enable cycle
-- Verify no WebSocket connection leaks (check server `/rooms` endpoint)
+**Commanding Claude:**
+- [ ] **Inline commands** — `/claude <instruction>` syntax detected via CM6 decoration or Y.Text observer, forwarded to sidecar.
+- [ ] **Command palette integration** — "Ask Claude to..." prompts with document context.
+- [ ] **Sidebar chat** — panel for chatting with Claude about the document, backed by a Y.Array for shared conversation.
 
-### 7. Settings panel
+**Claude's workflow:**
+- [ ] **Settle heuristic** — debounce after last edit before processing commands (configurable, default 3s).
+- [ ] **Thinking indicator** — awareness state `{ thinking: true }` renders as animated indicator near Claude's cursor.
+- [ ] **Streaming edits** — throttled Y.Text insertions for a natural typing effect.
 
-- Change server URL, verify reconnection
-- Change display name/color, verify awareness updates
+**Suggested edits & approval:**
+- [ ] **Suggestion mode** — Claude writes to a `Y.Map("suggestions")` instead of main Y.Text. Each entry: id, range (relative positions), proposed text, rationale, status.
+- [ ] **Render suggestions as decorations** — CM6 inline diffs (strikethrough deletions, highlighted insertions) with accept/reject buttons.
+- [ ] **Accept/reject commands** — accept applies to Y.Text, reject removes. Batch accept/reject all.
+- [ ] **Suggestion notifications** — Notice when Claude adds suggestions, click to scroll.
 
-## M3: Agent sidecar + MCP
+### F4: Canonical Document & Conflict Resolution
 
-### 8. Wire up MCP server
+- [ ] **Host is canonical** — host's LevelDB is source of truth for recovery.
+- [ ] **Conflict markers** — brief highlight + Notice when concurrent edits merge in the same region.
+- [ ] **Edit attribution** — map Yjs client IDs → usernames via awareness, render as subtle per-line background.
+- [ ] **Version snapshots** — periodic Y.Doc snapshots, named entries in a Y.Array, rollback support.
 
-Implement `sidecar/src/index.ts` using `@modelcontextprotocol/sdk`:
+### F5: Block-Level CRDT
 
-- stdio transport for Claude Desktop
-- Connect to the y-websocket server as a peer
-- Map each MCP tool to `AgentDocumentSession` methods
-- Handle session lifecycle (connect/disconnect per room)
-- Set awareness: `{ user: { name: 'Claude Agent', color: '#8B5CF6' }, cursor: null }`
+Move from single Y.Text to structured document model.
 
-### 9. `list_open_rooms` tool
+- [ ] **Block model** — `Y.Array<Y.Map>` where each block has `{ type, text: Y.Text, attrs: Y.Map }`.
+- [ ] **Markdown ↔ block parser** — bidirectional, handles code blocks, nested lists, frontmatter.
+- [ ] **CM6 block binding** — per-block yCollab binding instead of whole-document.
+- [ ] **Structural conflict safety** — paragraph reordering doesn't corrupt text within blocks.
+- [ ] **Migration** — backwards compatible with existing single-Y.Text documents.
 
-Wire to `GET /rooms` on the server. Returns room names and client counts.
+---
 
-### 10. `insert_after_heading` tool
+## Implementation Priority
 
-Not yet implemented in `AgentDocumentSession`. Add a method that:
+**Near-term (next sessions):**
+1. P0 bugs — correctness fixes for collab lifecycle
+2. F1 presence basics — per-user colors, selection highlights, username visibility
+3. P1 robustness — disconnect handling, status bar states
+4. P2 UX — cursor CSS, who's here panel
 
-- Splits document into lines
-- Finds a line matching `^#{1,6}\s+{heading}` (case-insensitive)
-- Inserts text after that line
-- Wraps regex in try/catch like `insertAfterPattern`
+**Medium-term:**
+5. F3 Claude basics — invite command, thinking indicator, settle heuristic
+6. F3 suggestion mode — highest-value Claude feature
+7. P3 automated tests
+8. F2 networking basics — TLS, token auth
 
-### 11. Claude Desktop integration test
-
-- Configure `claude_desktop_config.json` to point at the sidecar
-- Open a note in Obsidian
-- Ask Claude to read the note, make an edit, and verify it appears in real time
-- Verify Claude's cursor appears in Obsidian
-
-## M4: Polish
-
-### 12. Reconnection handling
-
-- Server goes down → plugin should retry with exponential backoff
-- `y-websocket` has built-in reconnection but verify it works cleanly
-- Surface connection status in the Obsidian status bar
-
-### 13. External modification handling
-
-Currently logs a warning and ignores. Consider:
-
-- Showing a notice in Obsidian ("File modified externally, Yjs state is authoritative")
-- Optionally offering to re-import from `.md` (dangerous — loses Yjs history)
-
-### 14. Automated tests
-
-- Unit tests for `AgentDocumentSession` (pure Yjs, no network)
-- Integration test: spin up server, connect two `y-websocket` clients, verify edits sync
-- Test bootstrap ordering with mocked vault
-
-### 15. Documentation
-
-- Architecture diagram (Mermaid) in README
-- Claude Desktop MCP setup guide
-- Troubleshooting section (common issues: duplicate yjs, connection refused, etc.)
-
-## Future / stretch
-
-- **Block model:** Split document into `Y.Array<Y.Map>` with per-block `Y.Text` for structural conflict safety. Significant complexity increase.
-- **SSE transport:** For the MCP server, to support web-based LLM clients.
-- **Authentication:** Token-based auth on the WS server for non-local use.
-- **Conflict visualization:** See `test-vault/Projects/Project Beta.md` for ideas.
-- **Offline editing:** Queue Yjs updates locally and sync when server is reachable.
+**Longer-term:**
+9. F2 email invitations, user registry
+10. F4 conflict resolution, version snapshots
+11. F5 block-level CRDT
+12. F3 sidebar chat, streaming edits
