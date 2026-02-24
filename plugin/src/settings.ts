@@ -6,6 +6,8 @@ export interface CRDTCoEditorSettings {
   userName: string;
   userColor: string;
   debugLogging: boolean;
+  collabPort: number;
+  collabHost: string;
 }
 
 export const DEFAULT_SETTINGS: CRDTCoEditorSettings = {
@@ -13,6 +15,8 @@ export const DEFAULT_SETTINGS: CRDTCoEditorSettings = {
   userName: "Anonymous",
   userColor: "#3B82F6",
   debugLogging: false,
+  collabPort: 1234,
+  collabHost: "0.0.0.0",
 };
 
 export class CRDTCoEditorSettingTab extends PluginSettingTab {
@@ -27,9 +31,11 @@ export class CRDTCoEditorSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    containerEl.createEl("h3", { text: "Connection" });
+
     new Setting(containerEl)
       .setName("WebSocket server URL")
-      .setDesc("URL of the y-websocket relay server")
+      .setDesc("URL of the y-websocket relay server (used when joining)")
       .addText((text) =>
         text
           .setPlaceholder("ws://localhost:1234")
@@ -39,6 +45,39 @@ export class CRDTCoEditorSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("Server port")
+      .setDesc("Port for the hosted collaboration server")
+      .addText((text) =>
+        text
+          .setPlaceholder("1234")
+          .setValue(String(this.plugin.settings.collabPort))
+          .onChange(async (value) => {
+            const port = parseInt(value, 10);
+            if (!isNaN(port) && port > 0 && port < 65536) {
+              this.plugin.settings.collabPort = port;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Server bind address")
+      .setDesc(
+        "0.0.0.0 allows LAN connections; 127.0.0.1 restricts to this machine only"
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("0.0.0.0")
+          .setValue(this.plugin.settings.collabHost)
+          .onChange(async (value) => {
+            this.plugin.settings.collabHost = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    containerEl.createEl("h3", { text: "Identity" });
 
     new Setting(containerEl)
       .setName("Display name")
@@ -65,6 +104,8 @@ export class CRDTCoEditorSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    containerEl.createEl("h3", { text: "Advanced" });
 
     new Setting(containerEl)
       .setName("Debug logging")

@@ -33,13 +33,14 @@ export class CRDTSession {
     private vault: Vault,
     private file: TFile,
     private vaultName: string,
-    private settings: CRDTCoEditorSettings
+    private settings: CRDTCoEditorSettings,
+    explicitRoom?: string
   ) {
     this.whenReady = new Promise<void>((resolve) => {
       this._readyResolve = resolve;
     });
 
-    const roomName = `obsidian/${this.vaultName}/${this.file.path}`;
+    const roomName = explicitRoom || `obsidian/${this.vaultName}/${this.file.path}`;
     log(`Session created: ${file.path} → room ${roomName}`);
 
     this.ydoc = new Y.Doc();

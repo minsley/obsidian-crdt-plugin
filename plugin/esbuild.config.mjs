@@ -45,6 +45,8 @@ const nodeBuiltins = [
   "node:fs", "fs",
   "node:path", "path",
   "node:os", "os",
+  "node:child_process", "child_process",
+  "node:module",
 ];
 
 const context = await esbuild.context({
