@@ -151,7 +151,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
   }
 
   private showJoinModal(): void {
-    new JoinCollabModal(this.app, async (roomCode) => {
+    const modal = new JoinCollabModal(this.app, async (roomCode) => {
       const activeFile = this.app.workspace.getActiveFile();
 
       this.activeRoomCode = roomCode;
@@ -167,6 +167,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
       log(`Joined room: ${roomCode}`);
     });
+    modal.open();
   }
 
   private copyRoomCode(): void {
