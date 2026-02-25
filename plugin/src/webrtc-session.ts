@@ -15,6 +15,15 @@ export function stripFrontmatter(content: string): string {
   return content[after] === "\n" ? content.slice(after + 1) : content.slice(after);
 }
 
+/** Extract the YAML frontmatter block (including trailing newline), or "". */
+function extractFrontmatter(content: string): string {
+  if (!content.startsWith("---")) return "";
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return "";
+  const after = end + 4;
+  return content[after] === "\n" ? content.slice(0, after + 1) : content.slice(0, after);
+}
+
 type EventMap = {
   "state-change": CollabState;
   peers: number;
@@ -35,6 +44,7 @@ export class WebRTCSession {
   provider: WebrtcProvider;
   private _selfWriteUntil = 0;
   private _destroyed = false;
+  private frontmatterPrefix = "";
   readonly whenReady: Promise<void>;
 
   private listeners = new Map<string, Function[]>();
@@ -103,16 +113,16 @@ export class WebRTCSession {
   private async bootstrap(): Promise<void> {
     debug(`bootstrap(${this.file.path}) uuid=${this.uuid}`);
 
+    const raw = await this.app.vault.read(this.file);
+    this.frontmatterPrefix = extractFrontmatter(raw);
+    const body = stripFrontmatter(raw);
+
     const loaded = await loadYjsState(this.app, this.uuid, this.ydoc);
 
     if (loaded && this.ytext.length > 0) {
-      const body = stripFrontmatter(await this.app.vault.read(this.file));
-      const yjsContent = this.ytext.toString();
-
-      if (yjsContent === body) {
+      if (this.ytext.toString() === body) {
         debug(`bootstrap: Yjs matches disk, resuming`);
       } else {
-        // Offline edits exist — diff-apply deferred; for now Yjs is authoritative
         warn(
           `bootstrap: Yjs differs from disk for ${this.file.path} — using Yjs state (diff-apply deferred)`
         );
@@ -120,7 +130,6 @@ export class WebRTCSession {
       return;
     }
 
-    const body = stripFrontmatter(await this.app.vault.read(this.file));
     if (body.length > 0) {
       debug(`bootstrap: seeding from .md body (${body.length} chars)`);
       this.ydoc.transact(() => {
@@ -133,7 +142,7 @@ export class WebRTCSession {
 
   private async writeMarkdownFile(): Promise<void> {
     if (this._destroyed) return;
-    const content = this.ytext.toString();
+    const content = this.frontmatterPrefix + this.ytext.toString();
     this._selfWriteUntil = Date.now() + 500;
     await this.app.vault.modify(this.file, content);
     await saveYjsState(this.app, this.uuid, this.ydoc);
