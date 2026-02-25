@@ -200,7 +200,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
           const info = this.collabFiles.get(file.path);
           if (info?.session && !info.session.isSelfWrite) {
             const diskContent = stripFrontmatter(await this.app.vault.read(file));
-            const ytextContent = info.session.ytext.toString();
+            const ytextContent = stripFrontmatter(info.session.ytext.toString());
             if (diskContent !== ytextContent) {
               warn(
                 `External modification detected for ${file.path} — Yjs state is authoritative`

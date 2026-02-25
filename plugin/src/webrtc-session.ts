@@ -44,7 +44,6 @@ export class WebRTCSession {
   provider: WebrtcProvider;
   private _selfWriteUntil = 0;
   private _destroyed = false;
-  private frontmatterPrefix = "";
   readonly whenReady: Promise<void>;
 
   private listeners = new Map<string, Function[]>();
@@ -114,13 +113,13 @@ export class WebRTCSession {
     debug(`bootstrap(${this.file.path}) uuid=${this.uuid}`);
 
     const raw = await this.app.vault.read(this.file);
-    this.frontmatterPrefix = extractFrontmatter(raw);
     const body = stripFrontmatter(raw);
 
     const loaded = await loadYjsState(this.app, this.uuid, this.ydoc);
 
     if (loaded && this.ytext.length > 0) {
-      if (this.ytext.toString() === body) {
+      // ytext may contain FM if yCollab previously synced it from the editor; strip before comparing
+      if (stripFrontmatter(this.ytext.toString()) === body) {
         debug(`bootstrap: Yjs matches disk, resuming`);
       } else {
         warn(
@@ -142,7 +141,22 @@ export class WebRTCSession {
 
   private async writeMarkdownFile(): Promise<void> {
     if (this._destroyed) return;
-    const content = this.frontmatterPrefix + this.ytext.toString();
+
+    // yCollab may sync frontmatter from the Obsidian editor into ytext — always strip it.
+    // Read FM fresh from disk so we never lose it and never duplicate it.
+    const current = await this.app.vault.read(this.file);
+    const fm = extractFrontmatter(current);
+    const body = stripFrontmatter(this.ytext.toString());
+    const content = fm + body;
+
+    // No-op guard: if nothing changed, skip the write entirely.
+    // This breaks the FM-duplication loop: writing FM+body → editor reload → yCollab
+    // inserts FM into ytext → we strip it here → same content → no write → loop stops.
+    if (content === current) {
+      await saveYjsState(this.app, this.uuid, this.ydoc);
+      return;
+    }
+
     this._selfWriteUntil = Date.now() + 500;
     await this.app.vault.modify(this.file, content);
     await saveYjsState(this.app, this.uuid, this.ydoc);
