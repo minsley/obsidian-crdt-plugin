@@ -152,20 +152,29 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
   private showJoinModal(): void {
     const modal = new JoinCollabModal(this.app, async (roomCode) => {
-      const activeFile = this.app.workspace.getActiveFile();
+      try {
+        // Derive a safe filename from the room code, avoiding conflicts.
+        const basePath = `${roomCode}.md`;
+        let filePath = basePath;
+        let n = 2;
+        while (this.app.vault.getAbstractFileByPath(filePath)) {
+          filePath = `${roomCode}-${n++}.md`;
+        }
 
-      this.activeRoomCode = roomCode;
-      this.collabActive = true;
-      this.updateStatusBar();
+        const file = await this.app.vault.create(filePath, "");
+        await this.app.workspace.getLeaf(false).openFile(file);
 
-      if (activeFile && activeFile.extension === "md") {
-        this.openSession(activeFile, roomCode);
-        new Notice(`Joined room: ${roomCode}`);
-      } else {
-        new Notice(`Joined room: ${roomCode} — open a file to start editing`);
+        this.activeRoomCode = roomCode;
+        this.collabActive = true;
+        this.updateStatusBar();
+
+        this.openSession(file, roomCode);
+        new Notice(`Joined room: ${roomCode} → ${filePath}`);
+        log(`Joined room: ${roomCode}, file: ${filePath}`);
+      } catch (e: any) {
+        new Notice(`Failed to join: ${e.message}`);
+        warn(`Join failed: ${e.message}`);
       }
-
-      log(`Joined room: ${roomCode}`);
     });
     modal.open();
   }
