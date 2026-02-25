@@ -6,6 +6,15 @@ import { log, debug, warn } from "./log";
 import type { CRDTCoEditorSettings } from "./settings";
 import type { CollabState } from "./collab-state";
 
+/** Strip YAML frontmatter block so ytext only holds document body. */
+export function stripFrontmatter(content: string): string {
+  if (!content.startsWith("---")) return content;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return content;
+  const after = end + 4; // skip past '\n---'
+  return content[after] === "\n" ? content.slice(after + 1) : content.slice(after);
+}
+
 type EventMap = {
   "state-change": CollabState;
   peers: number;
@@ -97,10 +106,10 @@ export class WebRTCSession {
     const loaded = await loadYjsState(this.app, this.uuid, this.ydoc);
 
     if (loaded && this.ytext.length > 0) {
-      const markdown = await this.app.vault.read(this.file);
+      const body = stripFrontmatter(await this.app.vault.read(this.file));
       const yjsContent = this.ytext.toString();
 
-      if (yjsContent === markdown) {
+      if (yjsContent === body) {
         debug(`bootstrap: Yjs matches disk, resuming`);
       } else {
         // Offline edits exist — diff-apply deferred; for now Yjs is authoritative
@@ -111,11 +120,11 @@ export class WebRTCSession {
       return;
     }
 
-    const markdown = await this.app.vault.read(this.file);
-    if (markdown.length > 0) {
-      debug(`bootstrap: seeding from .md (${markdown.length} chars)`);
+    const body = stripFrontmatter(await this.app.vault.read(this.file));
+    if (body.length > 0) {
+      debug(`bootstrap: seeding from .md body (${body.length} chars)`);
       this.ydoc.transact(() => {
-        this.ytext.insert(0, markdown);
+        this.ytext.insert(0, body);
       });
     } else {
       debug(`bootstrap: empty doc, waiting for peers`);

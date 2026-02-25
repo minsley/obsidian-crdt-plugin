@@ -7,7 +7,7 @@ import {
 } from "obsidian";
 import { WebrtcProvider } from "y-webrtc";
 import * as Y from "yjs";
-import { WebRTCSession } from "./webrtc-session";
+import { WebRTCSession, stripFrontmatter } from "./webrtc-session";
 import { createCollabExtension } from "./cm-extension";
 import { log, warn, debug, setDebug } from "./log";
 import {
@@ -199,7 +199,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
         if (file instanceof TFile) {
           const info = this.collabFiles.get(file.path);
           if (info?.session && !info.session.isSelfWrite) {
-            const diskContent = await this.app.vault.read(file);
+            const diskContent = stripFrontmatter(await this.app.vault.read(file));
             const ytextContent = info.session.ytext.toString();
             if (diskContent !== ytextContent) {
               warn(
@@ -365,14 +365,14 @@ export default class CRDTCoEditorPlugin extends Plugin {
   async joinSession(roomCode: string): Promise<void> {
     this.ensureSettingsIdentity();
 
-    const uuid = await this.discoverUuid(roomCode);
-    log(`joinSession: discovered uuid=${uuid} for room=${roomCode}`);
+    const { uuid, filename } = await this.discoverUuid(roomCode);
+    log(`joinSession: discovered uuid=${uuid} filename=${filename} room=${roomCode}`);
 
     // Find or create the file with this UUID
     let file = findFileByCollabId(this.app, uuid);
     if (!file) {
-      // New file for this collab document
-      const baseName = roomCode;
+      // Use the host's filename (strip .md suffix for dedup logic)
+      const baseName = filename.replace(/\.md$/, "");
       let filePath = `${baseName}.md`;
       let n = 2;
       while (this.app.vault.getAbstractFileByPath(filePath)) {
@@ -422,8 +422,10 @@ export default class CRDTCoEditorPlugin extends Plugin {
     log(`joinSession: connected to ${file.path} room=${roomCode}`);
   }
 
-  // Discover the UUID for a room code by listening to peer awareness
-  private discoverUuid(roomCode: string): Promise<string> {
+  // Discover the UUID and filename for a room code by listening to peer awareness
+  private discoverUuid(
+    roomCode: string
+  ): Promise<{ uuid: string; filename: string }> {
     return new Promise((resolve, reject) => {
       const tempDoc = new Y.Doc();
       const tempProvider = new WebrtcProvider(roomCode, tempDoc, {
@@ -444,10 +446,10 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
       const check = () => {
         for (const [, state] of tempProvider.awareness.getStates()) {
-          const uuid = (state as any).docMeta?.uuid;
-          if (uuid) {
+          const meta = (state as any).docMeta;
+          if (meta?.uuid) {
             cleanup();
-            resolve(uuid);
+            resolve({ uuid: meta.uuid, filename: meta.filename ?? meta.uuid });
             return;
           }
         }
