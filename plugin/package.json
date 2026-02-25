@@ -9,16 +9,17 @@
     "dev": "node esbuild.config.mjs --watch"
   },
   "dependencies": {
-    "yjs": "^13.6.0",
+    "y-codemirror.next": "^0.3.5",
+    "y-webrtc": "^10.3.0",
     "y-websocket": "^2.0.0",
-    "y-codemirror.next": "^0.3.5"
+    "yjs": "^13.6.0"
   },
   "devDependencies": {
-    "obsidian": "^1.5.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
     "@types/node": "^20.0.0",
     "esbuild": "^0.21.0",
-    "typescript": "^5.4.0",
-    "@codemirror/state": "^6.0.0",
-    "@codemirror/view": "^6.0.0"
+    "obsidian": "^1.5.0",
+    "typescript": "^5.4.0"
   }
 }

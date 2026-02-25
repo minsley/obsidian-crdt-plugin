@@ -4,7 +4,7 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import * as Y from "yjs";
 import { debug } from "./log";
 import type CRDTCoEditorPlugin from "./main";
-import type { CRDTSession } from "./session";
+import type { WebRTCSession } from "./webrtc-session";
 
 /**
  * CM6 extension that dynamically binds the correct Y.Text per editor view
@@ -63,7 +63,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
         }
       }
 
-      private waitAndAttach(session: CRDTSession, filePath: string) {
+      private waitAndAttach(session: WebRTCSession, filePath: string) {
         debug(`[cm] waitAndAttach(${filePath})`);
         session.whenReady.then(() => {
           if (this.currentPath === filePath && !this.hasActiveCollab()) {

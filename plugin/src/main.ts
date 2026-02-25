@@ -1,7 +1,6 @@
-import { Plugin, TFile, MarkdownView, Notice, Modal, Setting, Platform } from "obsidian";
-import { CRDTSession } from "./session";
+import { Plugin, TFile, MarkdownView, Notice, Modal, Setting } from "obsidian";
+import { WebRTCSession } from "./webrtc-session";
 import { createCollabExtension } from "./cm-extension";
-import { ServerManager } from "./server-manager";
 import { log, warn, debug, setDebug } from "./log";
 import {
   CRDTCoEditorSettings,
@@ -9,31 +8,46 @@ import {
   DEFAULT_SETTINGS,
 } from "./settings";
 
+const ADJECTIVES = [
+  "amber", "bold", "calm", "dark", "easy", "fast", "gold", "hazy",
+  "iron", "just", "keen", "lime", "mild", "neat", "open", "pink",
+  "quick", "rare", "sage", "teal", "unit", "vast", "warm", "zinc",
+];
+
+const NOUNS = [
+  "arch", "beam", "cave", "dock", "edge", "fern", "gate", "hive",
+  "isle", "jade", "knot", "lake", "mesa", "node", "onyx", "peak",
+  "quay", "reef", "star", "tide", "vale", "wave", "yard", "zone",
+];
+
+function generateRoomCode(): string {
+  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
+  const num = Math.floor(Math.random() * 100).toString().padStart(2, "0");
+  return `${adj}-${noun}-${num}`;
+}
+
 export default class CRDTCoEditorPlugin extends Plugin {
   settings: CRDTCoEditorSettings = DEFAULT_SETTINGS;
-  sessions = new Map<string, CRDTSession>();
-  serverManager = new ServerManager();
+  sessions = new Map<string, WebRTCSession>();
   private statusBarEl: HTMLElement | null = null;
   private collabActive = false;
+  private activeRoomCode: string | null = null;
 
   async onload() {
     await this.loadSettings();
     setDebug(this.settings.debugLogging);
-    log("Plugin loaded");
+    log("Plugin loaded (WebRTC mode)");
     this.addSettingTab(new CRDTCoEditorSettingTab(this.app, this));
 
-    // Register the CM6 collab extension (shared across all editors)
     this.registerEditorExtension(createCollabExtension(this));
 
-    // Status bar
     this.statusBarEl = this.addStatusBarItem();
     this.updateStatusBar();
 
-    // --- Commands ---
-
     this.addCommand({
       id: "start-collab",
-      name: "Start collaboration (host server)",
+      name: "Start collaboration (host)",
       callback: () => this.startCollab(),
     });
 
@@ -55,8 +69,6 @@ export default class CRDTCoEditorPlugin extends Plugin {
       callback: () => this.copyRoomCode(),
     });
 
-    // --- Ribbon icon ---
-
     this.addRibbonIcon("users", "Toggle collaboration", () => {
       if (this.collabActive) {
         this.stopCollab();
@@ -65,12 +77,10 @@ export default class CRDTCoEditorPlugin extends Plugin {
       }
     });
 
-    // --- Events ---
-
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (this.collabActive && file instanceof TFile && file.extension === "md") {
-          this.openSession(file);
+          this.openSession(file, this.activeRoomCode ?? undefined);
         }
       })
     );
@@ -83,9 +93,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
             const diskContent = await this.app.vault.read(file);
             const ytextContent = session.ytext.toString();
             if (diskContent !== ytextContent) {
-              warn(
-                `External modification detected for ${file.path} — Yjs state is authoritative.`
-              );
+              warn(`External modification detected for ${file.path} — Yjs state is authoritative.`);
             }
           }
         }
@@ -113,172 +121,72 @@ export default class CRDTCoEditorPlugin extends Plugin {
       return;
     }
 
-    if (!Platform.isDesktopApp) {
-      new Notice("Collaboration requires Obsidian desktop");
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile || activeFile.extension !== "md") {
+      new Notice("Open a markdown file first");
       return;
     }
 
-    try {
-      // Resolve server script path relative to plugin directory
-      const pluginDir = this.getPluginDir();
-      const serverScript = `${pluginDir}/server.js`;
+    const roomCode = generateRoomCode();
+    this.activeRoomCode = roomCode;
+    this.collabActive = true;
+    this.updateStatusBar();
 
-      // Check if bundled server.js exists — if not, fall back to server/dist/server.js
-      // in the workspace (for development)
-      const dataDir = `${pluginDir}/server-data`;
+    this.openSession(activeFile, roomCode);
 
-      new Notice("Starting collaboration server...");
-
-      await this.serverManager.start(
-        serverScript,
-        this.settings.collabPort,
-        this.settings.collabHost,
-        dataDir
-      );
-
-      // Update settings to point at the managed server
-      this.settings.serverUrl = this.serverManager.wsUrl;
-      this.collabActive = true;
-      this.updateStatusBar();
-
-      // Open session for current file
-      const activeFile = this.app.workspace.getActiveFile();
-      if (activeFile && activeFile.extension === "md") {
-        this.openSession(activeFile);
-        // Register room code
-        const roomName = `obsidian/${this.app.vault.getName()}/${activeFile.path}`;
-        const code = await this.serverManager.createRoomCode(roomName);
-        new Notice(`Collaboration active! Room code: ${code}`);
-        navigator.clipboard.writeText(code);
-        log(`Room code for ${activeFile.path}: ${code} (copied to clipboard)`);
-      } else {
-        new Notice("Collaboration server started");
-      }
-    } catch (e: any) {
-      warn(`Failed to start server: ${e.message}`);
-      new Notice(`Failed to start collaboration: ${e.message}`);
-    }
+    new Notice(`Collaboration started! Room code: ${roomCode} (copied)`);
+    navigator.clipboard.writeText(roomCode);
+    log(`Hosting room: ${roomCode}`);
   }
 
   stopCollab(): void {
-    // Destroy all sessions
     for (const [, session] of this.sessions) {
       session.destroy();
     }
     this.sessions.clear();
-
-    // Stop server
-    this.serverManager.stop();
     this.collabActive = false;
+    this.activeRoomCode = null;
     this.updateStatusBar();
     log("Collaboration stopped");
   }
 
-  private async showJoinModal(): Promise<void> {
-    const modal = new JoinCollabModal(this.app, async (serverUrl, roomCode) => {
-      try {
-        // Update server URL
-        this.settings.serverUrl = serverUrl;
-        this.collabActive = true;
-        this.updateStatusBar();
+  private showJoinModal(): void {
+    new JoinCollabModal(this.app, async (roomCode) => {
+      const activeFile = this.app.workspace.getActiveFile();
 
-        // Resolve room code to room name
-        const httpUrl = serverUrl.replace(/^ws/, "http");
-        const res = await fetch(
-          `${httpUrl}/rooms/lookup/${encodeURIComponent(roomCode)}`
-        );
-        if (!res.ok) {
-          throw new Error("Invalid room code");
-        }
-        const data = await res.json();
-        const roomName: string = data.roomName;
+      this.activeRoomCode = roomCode;
+      this.collabActive = true;
+      this.updateStatusBar();
 
-        // Extract file path from room name: "obsidian/<vault>/<filePath>"
-        const parts = roomName.split("/");
-        const filePath = parts.slice(2).join("/");
-
-        // Create the file locally if it doesn't exist
-        let file = this.app.vault.getAbstractFileByPath(filePath);
-        if (!file) {
-          // Create parent directories if needed
-          const dir = filePath.substring(0, filePath.lastIndexOf("/"));
-          if (dir) {
-            await this.app.vault.createFolder(dir).catch(() => {});
-          }
-          file = await this.app.vault.create(filePath, "");
-        }
-
-        if (file instanceof TFile) {
-          // Open the file
-          await this.app.workspace.openLinkText(filePath, "", false);
-
-          // Open a CRDT session with the resolved room name
-          this.openSessionWithRoom(file, roomName);
-
-          new Notice(`Joined collaboration: ${filePath}`);
-        }
-      } catch (e: any) {
-        new Notice(`Failed to join: ${e.message}`);
-        warn(`Join failed: ${e.message}`);
-        this.collabActive = false;
-        this.updateStatusBar();
+      if (activeFile && activeFile.extension === "md") {
+        this.openSession(activeFile, roomCode);
+        new Notice(`Joined room: ${roomCode}`);
+      } else {
+        new Notice(`Joined room: ${roomCode} — open a file to start editing`);
       }
+
+      log(`Joined room: ${roomCode}`);
     });
-    modal.open();
   }
 
-  private async copyRoomCode(): Promise<void> {
-    if (!this.serverManager.isRunning) {
-      new Notice("Start collaboration first");
+  private copyRoomCode(): void {
+    if (!this.activeRoomCode) {
+      new Notice("Start or join a collaboration first");
       return;
     }
-
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile) {
-      new Notice("No active file");
-      return;
-    }
-
-    const roomName = `obsidian/${this.app.vault.getName()}/${activeFile.path}`;
-    try {
-      const code = await this.serverManager.createRoomCode(roomName);
-      await navigator.clipboard.writeText(code);
-      new Notice(`Room code copied: ${code}`);
-    } catch (e: any) {
-      new Notice(`Failed to get room code: ${e.message}`);
-    }
+    navigator.clipboard.writeText(this.activeRoomCode);
+    new Notice(`Room code copied: ${this.activeRoomCode}`);
   }
 
   // --- Session management ---
 
-  openSession(file: TFile) {
+  openSession(file: TFile, roomCode?: string) {
     if (this.sessions.has(file.path)) return;
 
-    const vaultName = this.app.vault.getName();
-    const session = new CRDTSession(
-      this.app.vault,
-      file,
-      vaultName,
-      this.settings
-    );
+    const room = roomCode ?? this.activeRoomCode ?? generateRoomCode();
+    const session = new WebRTCSession(this.app.vault, file, room, this.settings);
     this.sessions.set(file.path, session);
-  }
-
-  /**
-   * Open a session with an explicit room name (for joining via room code).
-   * The room name may not match the local vault/file path convention.
-   */
-  private openSessionWithRoom(file: TFile, roomName: string) {
-    if (this.sessions.has(file.path)) return;
-
-    const session = new CRDTSession(
-      this.app.vault,
-      file,
-      "", // vault name is embedded in roomName already
-      this.settings,
-      roomName // explicit room override
-    );
-    this.sessions.set(file.path, session);
+    debug(`Opened WebRTC session for ${file.path} in room ${room}`);
   }
 
   private cleanupStaleSessions() {
@@ -299,28 +207,17 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
   private updateStatusBar() {
     if (!this.statusBarEl) return;
-    if (this.collabActive) {
-      const port = this.serverManager.isRunning
-        ? ` (hosting :${this.serverManager.port})`
-        : " (joined)";
-      this.statusBarEl.setText(`Collab: Active${port}`);
+    if (this.collabActive && this.activeRoomCode) {
+      this.statusBarEl.setText(`Collab: ${this.activeRoomCode}`);
+    } else if (this.collabActive) {
+      this.statusBarEl.setText("Collab: Active");
     } else {
       this.statusBarEl.setText("");
     }
   }
 
-  private getPluginDir(): string {
-    // @ts-expect-error — accessing internal basePath
-    const vaultPath = this.app.vault.adapter.basePath;
-    return `${vaultPath}/.obsidian/plugins/obsidian-crdt-coeditor`;
-  }
-
   async loadSettings() {
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
-      await this.loadData()
-    );
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
 
   async saveSettings() {
@@ -332,13 +229,9 @@ export default class CRDTCoEditorPlugin extends Plugin {
 // --- Join Modal ---
 
 class JoinCollabModal extends Modal {
-  private serverUrl = "ws://localhost:1234";
   private roomCode = "";
 
-  constructor(
-    app: any,
-    private onSubmit: (serverUrl: string, roomCode: string) => void
-  ) {
+  constructor(app: any, private onSubmit: (roomCode: string) => void) {
     super(app);
   }
 
@@ -347,22 +240,12 @@ class JoinCollabModal extends Modal {
     contentEl.createEl("h2", { text: "Join Collaboration" });
 
     new Setting(contentEl)
-      .setName("Server URL")
-      .setDesc("WebSocket URL of the host's server")
-      .addText((text) =>
-        text
-          .setPlaceholder("ws://192.168.1.5:1234")
-          .setValue(this.serverUrl)
-          .onChange((v) => (this.serverUrl = v))
-      );
-
-    new Setting(contentEl)
       .setName("Room code")
       .setDesc("Code shared by the host (e.g. calm-reef-42)")
       .addText((text) =>
         text
           .setPlaceholder("calm-reef-42")
-          .onChange((v) => (this.roomCode = v))
+          .onChange((v) => (this.roomCode = v.trim()))
       );
 
     new Setting(contentEl).addButton((btn) =>
@@ -370,12 +253,12 @@ class JoinCollabModal extends Modal {
         .setButtonText("Join")
         .setCta()
         .onClick(() => {
-          if (!this.roomCode.trim()) {
+          if (!this.roomCode) {
             new Notice("Please enter a room code");
             return;
           }
           this.close();
-          this.onSubmit(this.serverUrl, this.roomCode.trim());
+          this.onSubmit(this.roomCode);
         })
     );
   }
