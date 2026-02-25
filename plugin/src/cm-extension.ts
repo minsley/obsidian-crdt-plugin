@@ -38,7 +38,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
 
         if (filePath === this.currentPath) {
           if (filePath && !this.hasActiveCollab()) {
-            const session = plugin.sessions.get(filePath);
+            const session = plugin.collabFiles.get(filePath)?.session;
             if (session) {
               debug(`[cm] found new session for ${filePath}`);
               this.waitAndAttach(session, filePath);
@@ -55,7 +55,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
           return;
         }
 
-        const session = plugin.sessions.get(filePath);
+        const session = plugin.collabFiles.get(filePath)?.session;
         if (session) {
           this.waitAndAttach(session, filePath);
         } else {

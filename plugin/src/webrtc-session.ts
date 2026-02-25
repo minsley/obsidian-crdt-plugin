@@ -1,18 +1,24 @@
-import { Vault, TFile, debounce } from "obsidian";
+import { App, TFile, debounce } from "obsidian";
 import * as Y from "yjs";
 import { WebrtcProvider } from "y-webrtc";
 import { loadYjsState, saveYjsState } from "./persistence";
-import { log, debug } from "./log";
+import { log, debug, warn } from "./log";
 import type { CRDTCoEditorSettings } from "./settings";
+import type { CollabState } from "./collab-state";
+
+type EventMap = {
+  "state-change": CollabState;
+  peers: number;
+};
 
 /**
- * Manages a single Y.Doc ↔ WebRTC session for one file.
+ * Manages a single Y.Doc ↔ WebRTC session for one collaborative file.
  *
- * Bootstrap ordering (immediate, no server sync needed):
- *   1. Local .yjs file exists → load from it
- *   2. Neither → seed from .md file content
- *
- * When remote peers connect, Yjs CRDT merge reconciles state automatically.
+ * Bootstrap ordering:
+ *   1. Load Yjs state from UUID-keyed plugin folder
+ *   2. If Yjs is empty → seed from .md content
+ *   3. If Yjs matches .md → normal resumption
+ *   4. If Yjs ≠ .md → warn and use Yjs (diff-apply deferred)
  */
 export class WebRTCSession {
   ydoc: Y.Doc;
@@ -22,6 +28,8 @@ export class WebRTCSession {
   private _destroyed = false;
   readonly whenReady: Promise<void>;
 
+  private listeners = new Map<string, Function[]>();
+
   private debouncedWriteMarkdown = debounce(
     () => this.writeMarkdownFile(),
     1000,
@@ -29,18 +37,19 @@ export class WebRTCSession {
   );
 
   constructor(
-    private vault: Vault,
+    private app: App,
     private file: TFile,
-    roomName: string,
+    readonly uuid: string,
+    roomCode: string,
     private settings: CRDTCoEditorSettings
   ) {
-    log(`WebRTCSession created: ${file.path} → room ${roomName}`);
+    log(`WebRTCSession created: ${file.path} uuid=${uuid} room=${roomCode}`);
 
     this.ydoc = new Y.Doc();
     this.ydoc.gc = true;
     this.ytext = this.ydoc.getText("content");
 
-    this.provider = new WebrtcProvider(roomName, this.ydoc, {
+    this.provider = new WebrtcProvider(roomCode, this.ydoc, {
       signaling: [this.settings.signalingUrl],
     });
 
@@ -49,34 +58,67 @@ export class WebRTCSession {
       color: this.settings.userColor,
     });
 
+    // Advertise document identity so joiners can discover the UUID
+    this.provider.awareness.setLocalStateField("docMeta", {
+      uuid,
+      filename: file.name,
+    });
+
+    this.provider.awareness.on("change", () => {
+      const count = this.provider.awareness.getStates().size - 1; // exclude self
+      this.emit("peers", Math.max(0, count));
+    });
+
     this.ytext.observe(() => {
       if (!this._destroyed) {
         this.debouncedWriteMarkdown();
       }
     });
 
-    // Bootstrap immediately — no server sync gate needed.
-    // When remote peers connect, Yjs applies their updates automatically.
     this.whenReady = this.bootstrap();
   }
 
-  private async bootstrap(): Promise<void> {
-    debug(`bootstrap(${this.file.path})`);
+  on<K extends keyof EventMap>(
+    event: K,
+    cb: (data: EventMap[K]) => void
+  ): void {
+    const arr = this.listeners.get(event) ?? [];
+    arr.push(cb as Function);
+    this.listeners.set(event, arr);
+  }
 
-    const loaded = await loadYjsState(this.vault, this.file.path, this.ydoc);
+  private emit<K extends keyof EventMap>(event: K, data: EventMap[K]): void {
+    for (const cb of this.listeners.get(event) ?? []) cb(data);
+  }
+
+  private async bootstrap(): Promise<void> {
+    debug(`bootstrap(${this.file.path}) uuid=${this.uuid}`);
+
+    const loaded = await loadYjsState(this.app, this.uuid, this.ydoc);
+
     if (loaded && this.ytext.length > 0) {
-      debug(`bootstrap(${this.file.path}): loaded from .yjs`);
+      const markdown = await this.app.vault.read(this.file);
+      const yjsContent = this.ytext.toString();
+
+      if (yjsContent === markdown) {
+        debug(`bootstrap: Yjs matches disk, resuming`);
+      } else {
+        // Offline edits exist — diff-apply deferred; for now Yjs is authoritative
+        warn(
+          `bootstrap: Yjs differs from disk for ${this.file.path} — using Yjs state (diff-apply deferred)`
+        );
+      }
       return;
     }
 
-    const markdown = await this.vault.read(this.file);
+    const markdown = await this.app.vault.read(this.file);
     if (markdown.length > 0) {
-      debug(`bootstrap(${this.file.path}): seeding from .md (${markdown.length} chars)`);
+      debug(`bootstrap: seeding from .md (${markdown.length} chars)`);
       this.ydoc.transact(() => {
         this.ytext.insert(0, markdown);
       });
     } else {
-      debug(`bootstrap(${this.file.path}): empty doc, waiting for peers`);
+      debug(`bootstrap: empty doc, waiting for peers`);
     }
   }
 
@@ -84,8 +126,13 @@ export class WebRTCSession {
     if (this._destroyed) return;
     const content = this.ytext.toString();
     this._selfWriteUntil = Date.now() + 500;
-    await this.vault.modify(this.file, content);
-    await saveYjsState(this.vault, this.file.path, this.ydoc);
+    await this.app.vault.modify(this.file, content);
+    await saveYjsState(this.app, this.uuid, this.ydoc);
+  }
+
+  async flushAndSave(): Promise<void> {
+    this.debouncedWriteMarkdown.cancel?.();
+    await this.writeMarkdownFile();
   }
 
   get isSelfWrite(): boolean {

@@ -1,4 +1,12 @@
-import { Plugin, TFile, MarkdownView, Notice, Modal, Setting } from "obsidian";
+import {
+  Plugin,
+  TFile,
+  MarkdownView,
+  Notice,
+  setIcon,
+} from "obsidian";
+import { WebrtcProvider } from "y-webrtc";
+import * as Y from "yjs";
 import { WebRTCSession } from "./webrtc-session";
 import { createCollabExtension } from "./cm-extension";
 import { log, warn, debug, setDebug } from "./log";
@@ -7,6 +15,16 @@ import {
   CRDTCoEditorSettingTab,
   DEFAULT_SETTINGS,
 } from "./settings";
+import {
+  getCollabId,
+  setCollabId,
+  removeCollabId,
+  findFileByCollabId,
+} from "./frontmatter";
+import { deleteYjsState } from "./persistence";
+import { generateName, colorForPeerIndex } from "./identity";
+import type { CollabState, FileCollabInfo } from "./collab-state";
+import { OnlineModal } from "./online-modal";
 
 const ADJECTIVES = [
   "amber", "bold", "calm", "dark", "easy", "fast", "gold", "hazy",
@@ -27,12 +45,32 @@ function generateRoomCode(): string {
   return `${adj}-${noun}-${num}`;
 }
 
+function stateIcon(state: CollabState): string {
+  switch (state) {
+    case "offline":      return "radio-tower";
+    case "connecting":   return "loader";
+    case "live":         return "wifi";
+    case "disconnecting": return "loader";
+  }
+}
+
+function stateTooltip(state: CollabState, peerCount = 0): string {
+  switch (state) {
+    case "offline":      return "Go Online";
+    case "connecting":   return "Connecting...";
+    case "live":         return `Live — ${peerCount} peer${peerCount !== 1 ? "s" : ""} (click to go offline)`;
+    case "disconnecting": return "Disconnecting...";
+  }
+}
+
 export default class CRDTCoEditorPlugin extends Plugin {
   settings: CRDTCoEditorSettings = DEFAULT_SETTINGS;
-  sessions = new Map<string, WebRTCSession>();
-  private statusBarEl: HTMLElement | null = null;
-  private collabActive = false;
-  private activeRoomCode: string | null = null;
+
+  // Per-file collaboration state. Key = file.path
+  collabFiles = new Map<string, FileCollabInfo>();
+
+  // One header button per MarkdownView
+  private headerButtons = new WeakMap<MarkdownView, HTMLElement>();
 
   async onload() {
     await this.loadSettings();
@@ -42,188 +80,466 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
     this.registerEditorExtension(createCollabExtension(this));
 
-    this.statusBarEl = this.addStatusBarItem();
-    this.updateStatusBar();
-
     this.addCommand({
-      id: "start-collab",
-      name: "Start collaboration (host)",
-      callback: () => this.startCollab(),
+      id: "make-collaborative",
+      name: "Make Collaborative",
+      editorCallback: (_, ctx) => {
+        if (ctx.file) this.makeCollaborative(ctx.file);
+      },
     });
 
     this.addCommand({
-      id: "stop-collab",
-      name: "Stop collaboration",
-      callback: () => this.stopCollab(),
+      id: "go-online",
+      name: "Go Online",
+      editorCallback: (_, ctx) => {
+        if (ctx.file) this.goOnline(ctx.file);
+      },
     });
 
     this.addCommand({
-      id: "join-collab",
-      name: "Join collaboration session",
-      callback: () => this.showJoinModal(),
+      id: "go-offline",
+      name: "Go Offline",
+      editorCallback: (_, ctx) => {
+        if (ctx.file) this.goOffline(ctx.file);
+      },
     });
 
     this.addCommand({
       id: "copy-room-code",
-      name: "Copy room code for current file",
-      callback: () => this.copyRoomCode(),
+      name: "Copy Room Code",
+      editorCallback: (_, ctx) => {
+        if (ctx.file) this.copyRoomCode(ctx.file);
+      },
     });
 
-    this.addRibbonIcon("users", "Toggle collaboration", () => {
-      if (this.collabActive) {
-        this.stopCollab();
-      } else {
-        this.startCollab();
-      }
+    this.addCommand({
+      id: "unlink-collaboration",
+      name: "Unlink Collaboration",
+      editorCallback: (_, ctx) => {
+        if (ctx.file) this.unlinkFile(ctx.file);
+      },
     });
 
+    // Header buttons
     this.registerEvent(
-      this.app.workspace.on("file-open", (file) => {
-        if (this.collabActive && file instanceof TFile && file.extension === "md") {
-          this.openSession(file, this.activeRoomCode ?? undefined);
+      this.app.workspace.on("layout-change", () => this.syncHeaderButtons())
+    );
+    this.registerEvent(
+      this.app.workspace.on("file-open", () => this.syncHeaderButtons())
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () =>
+        this.syncHeaderButtons()
+      )
+    );
+
+    // File explorer context menu
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, abstractFile) => {
+        if (!(abstractFile instanceof TFile) || abstractFile.extension !== "md")
+          return;
+        const file = abstractFile;
+        const uuid = getCollabId(this.app, file);
+        if (!uuid) {
+          menu.addItem((item) =>
+            item
+              .setTitle("Make Collaborative")
+              .setIcon("users")
+              .onClick(() => this.makeCollaborative(file))
+          );
+        } else {
+          const info = this.collabFiles.get(file.path);
+          const state = info?.state ?? "offline";
+          if (state === "offline") {
+            menu.addItem((item) =>
+              item
+                .setTitle("Go Online")
+                .setIcon("radio-tower")
+                .onClick(() => this.goOnline(file))
+            );
+          } else if (state === "live") {
+            menu.addItem((item) =>
+              item
+                .setTitle("Go Offline")
+                .setIcon("wifi-off")
+                .onClick(() => this.goOffline(file))
+            );
+          }
+          if (info?.roomCode) {
+            menu.addItem((item) =>
+              item
+                .setTitle("Copy Room Code")
+                .setIcon("copy")
+                .onClick(() => this.copyRoomCode(file))
+            );
+          }
+          menu.addItem((item) =>
+            item
+              .setTitle("Unlink Collaboration")
+              .setIcon("unlink")
+              .onClick(() => this.unlinkFile(file))
+          );
         }
       })
     );
 
+    // Handle external file modifications while live
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
         if (file instanceof TFile) {
-          const session = this.sessions.get(file.path);
-          if (session && !session.isSelfWrite) {
+          const info = this.collabFiles.get(file.path);
+          if (info?.session && !info.session.isSelfWrite) {
             const diskContent = await this.app.vault.read(file);
-            const ytextContent = session.ytext.toString();
+            const ytextContent = info.session.ytext.toString();
             if (diskContent !== ytextContent) {
-              warn(`External modification detected for ${file.path} — Yjs state is authoritative.`);
+              warn(
+                `External modification detected for ${file.path} — Yjs state is authoritative`
+              );
             }
           }
-        }
-      })
-    );
-
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => {
-        if (this.collabActive) {
-          this.cleanupStaleSessions();
         }
       })
     );
   }
 
   async onunload() {
-    this.stopCollab();
+    for (const [, info] of this.collabFiles) {
+      if (info.session) {
+        await info.session.flushAndSave().catch(() => {});
+        info.session.destroy();
+      }
+    }
+    this.collabFiles.clear();
   }
 
   // --- Collaboration lifecycle ---
 
-  async startCollab(): Promise<void> {
-    if (this.collabActive) {
-      new Notice("Collaboration is already active");
+  async makeCollaborative(file: TFile): Promise<void> {
+    if (file.extension !== "md") {
+      new Notice("Only markdown files can be made collaborative");
       return;
     }
 
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile || activeFile.extension !== "md") {
-      new Notice("Open a markdown file first");
+    const existing = getCollabId(this.app, file);
+    if (existing) {
+      new Notice("File is already collaborative");
       return;
     }
 
+    const uuid = crypto.randomUUID();
+    await setCollabId(this.app, file, uuid);
+
+    this.collabFiles.set(file.path, {
+      uuid,
+      state: "offline",
+      peerCount: 0,
+    });
+
+    this.syncHeaderButtons();
+    new Notice(`File is now collaborative`);
+    log(`makeCollaborative: ${file.path} uuid=${uuid}`);
+  }
+
+  goOnline(file: TFile): void {
+    const uuid = getCollabId(this.app, file);
+    if (!uuid) {
+      new Notice('Make this file collaborative first (right-click → "Make Collaborative")');
+      return;
+    }
+
+    // Ensure state entry exists
+    if (!this.collabFiles.has(file.path)) {
+      this.collabFiles.set(file.path, {
+        uuid,
+        state: "offline",
+        peerCount: 0,
+      });
+    }
+
+    const info = this.collabFiles.get(file.path)!;
+    if (info.state !== "offline") {
+      new Notice(`Already ${info.state}`);
+      return;
+    }
+
+    new OnlineModal(this.app, this, file).open();
+  }
+
+  async goOffline(file: TFile): Promise<void> {
+    const info = this.collabFiles.get(file.path);
+    if (!info?.session) return;
+
+    this.setFileState(file.path, "disconnecting");
+
+    try {
+      await info.session.flushAndSave();
+    } catch (e) {
+      warn(`goOffline: flush failed for ${file.path}: ${e}`);
+    }
+
+    info.session.destroy();
+    info.session = undefined;
+    info.roomCode = undefined;
+
+    this.setFileState(file.path, "offline");
+    new Notice("Went offline");
+    log(`goOffline: ${file.path}`);
+  }
+
+  async unlinkFile(file: TFile): Promise<void> {
+    const uuid = getCollabId(this.app, file);
+    if (!uuid) {
+      new Notice("File is not collaborative");
+      return;
+    }
+
+    const info = this.collabFiles.get(file.path);
+    if (info?.session) {
+      await this.goOffline(file);
+    }
+
+    await removeCollabId(this.app, file);
+    await deleteYjsState(this.app, uuid);
+    this.collabFiles.delete(file.path);
+
+    this.syncHeaderButtons();
+    new Notice("Collaboration unlinked");
+    log(`unlinkFile: ${file.path} uuid=${uuid}`);
+  }
+
+  copyRoomCode(file: TFile): void {
+    const info = this.collabFiles.get(file.path);
+    if (!info?.roomCode) {
+      new Notice("No active room code — go online first");
+      return;
+    }
+    navigator.clipboard.writeText(info.roomCode);
+    new Notice(`Room code copied: ${info.roomCode}`);
+  }
+
+  // Called by OnlineModal — host path
+  beginHosting(file: TFile): string {
+    this.ensureSettingsIdentity();
+
+    const uuid = getCollabId(this.app, file)!;
     const roomCode = generateRoomCode();
-    this.activeRoomCode = roomCode;
-    this.collabActive = true;
-    this.updateStatusBar();
 
-    this.openSession(activeFile, roomCode);
+    const session = new WebRTCSession(
+      this.app,
+      file,
+      uuid,
+      roomCode,
+      this.settings
+    );
 
-    new Notice(`Collaboration started! Room code: ${roomCode} (copied)`);
-    navigator.clipboard.writeText(roomCode);
-    log(`Hosting room: ${roomCode}`);
-  }
-
-  stopCollab(): void {
-    for (const [, session] of this.sessions) {
-      session.destroy();
-    }
-    this.sessions.clear();
-    this.collabActive = false;
-    this.activeRoomCode = null;
-    this.updateStatusBar();
-    log("Collaboration stopped");
-  }
-
-  private showJoinModal(): void {
-    const modal = new JoinCollabModal(this.app, async (roomCode) => {
-      try {
-        // Derive a safe filename from the room code, avoiding conflicts.
-        const basePath = `${roomCode}.md`;
-        let filePath = basePath;
-        let n = 2;
-        while (this.app.vault.getAbstractFileByPath(filePath)) {
-          filePath = `${roomCode}-${n++}.md`;
-        }
-
-        const file = await this.app.vault.create(filePath, "");
-        await this.app.workspace.getLeaf(false).openFile(file);
-
-        this.activeRoomCode = roomCode;
-        this.collabActive = true;
-        this.updateStatusBar();
-
-        this.openSession(file, roomCode);
-        new Notice(`Joined room: ${roomCode} → ${filePath}`);
-        log(`Joined room: ${roomCode}, file: ${filePath}`);
-      } catch (e: any) {
-        new Notice(`Failed to join: ${e.message}`);
-        warn(`Join failed: ${e.message}`);
+    session.on("peers", (count) => {
+      const i = this.collabFiles.get(file.path);
+      if (i) {
+        i.peerCount = count;
+        this.updateHeaderButtonsForFile(file);
       }
     });
-    modal.open();
+
+    const info = this.collabFiles.get(file.path)!;
+    info.session = session;
+    info.roomCode = roomCode;
+    info.state = "live";
+    info.peerCount = 0;
+
+    this.syncHeaderButtons();
+    log(`beginHosting: ${file.path} room=${roomCode}`);
+    return roomCode;
   }
 
-  private copyRoomCode(): void {
-    if (!this.activeRoomCode) {
-      new Notice("Start or join a collaboration first");
+  // Called by OnlineModal — join path
+  async joinSession(roomCode: string): Promise<void> {
+    this.ensureSettingsIdentity();
+
+    const uuid = await this.discoverUuid(roomCode);
+    log(`joinSession: discovered uuid=${uuid} for room=${roomCode}`);
+
+    // Find or create the file with this UUID
+    let file = findFileByCollabId(this.app, uuid);
+    if (!file) {
+      // New file for this collab document
+      const baseName = roomCode;
+      let filePath = `${baseName}.md`;
+      let n = 2;
+      while (this.app.vault.getAbstractFileByPath(filePath)) {
+        filePath = `${baseName}-${n++}.md`;
+      }
+      file = await this.app.vault.create(filePath, "");
+      await setCollabId(this.app, file, uuid);
+      debug(`joinSession: created new file ${filePath}`);
+    } else {
+      debug(`joinSession: found existing file ${file.path}`);
+    }
+
+    // Open file in editor
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
+
+    // Ensure state entry
+    if (!this.collabFiles.has(file.path)) {
+      this.collabFiles.set(file.path, { uuid, state: "offline", peerCount: 0 });
+    }
+
+    const session = new WebRTCSession(
+      this.app,
+      file,
+      uuid,
+      roomCode,
+      this.settings
+    );
+
+    const filePath = file.path;
+    session.on("peers", (count) => {
+      const i = this.collabFiles.get(filePath);
+      if (i) {
+        i.peerCount = count;
+        this.updateHeaderButtonsForFile(file!);
+      }
+    });
+
+    const info = this.collabFiles.get(file.path)!;
+    info.session = session;
+    info.roomCode = roomCode;
+    info.state = "live";
+    info.peerCount = 0;
+
+    this.syncHeaderButtons();
+    new Notice(`Joined room: ${roomCode}`);
+    log(`joinSession: connected to ${file.path} room=${roomCode}`);
+  }
+
+  // Discover the UUID for a room code by listening to peer awareness
+  private discoverUuid(roomCode: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const tempDoc = new Y.Doc();
+      const tempProvider = new WebrtcProvider(roomCode, tempDoc, {
+        signaling: [this.settings.signalingUrl],
+      });
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Timeout: no host found in room (10s)"));
+      }, 10_000);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        tempProvider.awareness.off("change", check);
+        tempProvider.destroy();
+        tempDoc.destroy();
+      };
+
+      const check = () => {
+        for (const [, state] of tempProvider.awareness.getStates()) {
+          const uuid = (state as any).docMeta?.uuid;
+          if (uuid) {
+            cleanup();
+            resolve(uuid);
+            return;
+          }
+        }
+      };
+
+      tempProvider.awareness.on("change", check);
+    });
+  }
+
+  // --- Header buttons ---
+
+  syncHeaderButtons() {
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (!(leaf.view instanceof MarkdownView)) return;
+      const view = leaf.view as MarkdownView;
+
+      if (!this.headerButtons.has(view)) {
+        const btn = view.addAction("radio-tower", "Collaboration", () => {
+          const f = view.file;
+          if (f) this.onHeaderButtonClick(f);
+        });
+        this.headerButtons.set(view, btn);
+      }
+
+      this.updateHeaderButton(view);
+    });
+  }
+
+  private updateHeaderButton(view: MarkdownView) {
+    const btn = this.headerButtons.get(view);
+    if (!btn) return;
+
+    const file = view.file;
+    if (!file) {
+      btn.style.display = "none";
       return;
     }
-    navigator.clipboard.writeText(this.activeRoomCode);
-    new Notice(`Room code copied: ${this.activeRoomCode}`);
+
+    const uuid = getCollabId(this.app, file);
+    btn.style.display = "";
+
+    if (!uuid) {
+      setIcon(btn, "users");
+      btn.ariaLabel = "Make Collaborative";
+    } else {
+      const info = this.collabFiles.get(file.path);
+      const state: CollabState = info?.state ?? "offline";
+      setIcon(btn, stateIcon(state));
+      btn.ariaLabel = stateTooltip(state, info?.peerCount ?? 0);
+    }
   }
 
-  // --- Session management ---
-
-  openSession(file: TFile, roomCode?: string) {
-    if (this.sessions.has(file.path)) return;
-
-    const room = roomCode ?? this.activeRoomCode ?? generateRoomCode();
-    const session = new WebRTCSession(this.app.vault, file, room, this.settings);
-    this.sessions.set(file.path, session);
-    debug(`Opened WebRTC session for ${file.path} in room ${room}`);
-  }
-
-  private cleanupStaleSessions() {
-    const openPaths = new Set<string>();
+  private updateHeaderButtonsForFile(file: TFile) {
     this.app.workspace.iterateAllLeaves((leaf) => {
-      if (leaf.view instanceof MarkdownView && leaf.view.file) {
-        openPaths.add(leaf.view.file.path);
+      if (
+        leaf.view instanceof MarkdownView &&
+        leaf.view.file?.path === file.path
+      ) {
+        this.updateHeaderButton(leaf.view as MarkdownView);
       }
     });
+  }
 
-    for (const [path, session] of this.sessions) {
-      if (!openPaths.has(path)) {
-        session.destroy();
-        this.sessions.delete(path);
-      }
+  private onHeaderButtonClick(file: TFile) {
+    const uuid = getCollabId(this.app, file);
+    if (!uuid) {
+      this.makeCollaborative(file);
+      return;
+    }
+    const info = this.collabFiles.get(file.path);
+    const state: CollabState = info?.state ?? "offline";
+    if (state === "offline") {
+      this.goOnline(file);
+    } else if (state === "live") {
+      this.goOffline(file);
     }
   }
 
-  private updateStatusBar() {
-    if (!this.statusBarEl) return;
-    if (this.collabActive && this.activeRoomCode) {
-      this.statusBarEl.setText(`Collab: ${this.activeRoomCode}`);
-    } else if (this.collabActive) {
-      this.statusBarEl.setText("Collab: Active");
-    } else {
-      this.statusBarEl.setText("");
+  // --- Helpers ---
+
+  private setFileState(filePath: string, state: CollabState) {
+    const info = this.collabFiles.get(filePath);
+    if (!info) return;
+    info.state = state;
+    // Update buttons for any view showing this file
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (file instanceof TFile) {
+      this.updateHeaderButtonsForFile(file);
     }
+  }
+
+  private ensureSettingsIdentity() {
+    let changed = false;
+    if (!this.settings.userName) {
+      this.settings.userName = generateName();
+      changed = true;
+    }
+    if (!this.settings.userColor) {
+      this.settings.userColor = colorForPeerIndex(0);
+      changed = true;
+    }
+    if (changed) this.saveSettings().catch(() => {});
   }
 
   async loadSettings() {
@@ -233,47 +549,5 @@ export default class CRDTCoEditorPlugin extends Plugin {
   async saveSettings() {
     setDebug(this.settings.debugLogging);
     await this.saveData(this.settings);
-  }
-}
-
-// --- Join Modal ---
-
-class JoinCollabModal extends Modal {
-  private roomCode = "";
-
-  constructor(app: any, private onSubmit: (roomCode: string) => void) {
-    super(app);
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.createEl("h2", { text: "Join Collaboration" });
-
-    new Setting(contentEl)
-      .setName("Room code")
-      .setDesc("Code shared by the host (e.g. calm-reef-42)")
-      .addText((text) =>
-        text
-          .setPlaceholder("calm-reef-42")
-          .onChange((v) => (this.roomCode = v.trim()))
-      );
-
-    new Setting(contentEl).addButton((btn) =>
-      btn
-        .setButtonText("Join")
-        .setCta()
-        .onClick(() => {
-          if (!this.roomCode) {
-            new Notice("Please enter a room code");
-            return;
-          }
-          this.close();
-          this.onSubmit(this.roomCode);
-        })
-    );
-  }
-
-  onClose() {
-    this.contentEl.empty();
   }
 }

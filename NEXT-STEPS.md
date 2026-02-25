@@ -8,6 +8,7 @@
 - **Multi-user collab** — ribbon icon toggles hosting, command palette for join. Tested with 3 concurrent peers (1 host + 2 joiners).
 - **Debug logging** — toggleable via plugin settings, shared logger module.
 - **M4: WebRTC prototype** — y-webrtc peer-to-peer sync, self-hosted signaling server (`server/src/signaling.ts`), room codes as WebRTC room names, no embedded relay server needed.
+- **M5: Collaborative File Model** — UUID frontmatter identity (`collab-id`), UUID-keyed Yjs persistence in plugin folder (Obsidian Sync compatible), per-file `CollabState` machine, Host/Join modal with awareness-based UUID discovery, editor header buttons, file-menu entries, auto-generated adjective-animal names + hue-wheel colors.
 
 ---
 
@@ -82,27 +83,36 @@ Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Show
 
 ### N0: Core architecture
 
-- [ ] **UUID frontmatter read/write** — `getCollabId(file)`, `setCollabId(file, uuid)`, `removeCollabId(file)`. Parse/write YAML frontmatter without stomping other fields.
-- [ ] **Yjs storage migration** — move from `{filePath}.yjs` sidecars to `.obsidian/plugins/.../yjs/{uuid}`. Update `persistence.ts`.
-- [ ] **doc-meta protocol message** — host sends `{ type: 'doc-meta', uuid, filename }` before Yjs sync. Joiner waits for this before deciding which file to open.
-- [ ] **Bootstrap: diff-apply for offline edits** — if `.yjs` content ≠ `.md`, compute diff (Myers / patience), apply as Yjs text operations on top of existing history.
-- [ ] **Join flow: UUID lookup** — search vault for file with matching `collab-id`, handle found/not-found/no-yjs cases.
-- [ ] **Session state machine** — `CollabState` enum (`normal` | `offline` | `connecting` | `live` | `disconnecting`), per-file state tracked in plugin.
+- [x] **UUID frontmatter read/write** — `getCollabId`, `setCollabId`, `removeCollabId`, `findFileByCollabId` in `frontmatter.ts`.
+- [x] **Yjs storage migration** — UUID-keyed binary files in `.obsidian/plugins/obsidian-crdt-coeditor/yjs/{uuid}`. `persistence.ts` updated; old `.md_crdt` sidecar approach removed.
+- [x] **docMeta in awareness** — host sets `{ uuid, filename }` in awareness so joiners discover UUID via WebRTC awareness API.
+- [x] **Join flow: UUID lookup** — `discoverUuid(roomCode)` waits for awareness docMeta; `findFileByCollabId` searches vault; creates new file if not found.
+- [x] **Session state machine** — `CollabState` type + `FileCollabInfo` in `collab-state.ts`; `collabFiles: Map<string, FileCollabInfo>` replaces `collabActive` + `sessions`.
+- [ ] **Bootstrap: diff-apply for offline edits** — if `.yjs` content ≠ `.md`, apply diff as Yjs text operations. Deferred: requires `fast-diff` and Yjs transaction work.
 
 ### N1: UI
 
-- [ ] **Editor header button** — shows state icon, opens Online modal or toggles offline. Use `view.addAction()` on all MarkdownViews; update icon on state change.
-- [ ] **Online modal** — Host button + Join input in one modal. Host path: start session, transition modal to show room code. Join path: submit code → spinner → close.
-- [ ] **File explorer context menu** — "Make Collaborative" / "Unlink" / "Copy Room Code" via `file-menu` event.
-- [ ] **Unlink warning modal** — with "don't show again" checkbox, in-session Restore option.
-- [ ] **State-aware status bar** — replace current text with state + peer count for Collaborative files.
+- [x] **Editor header button** — `view.addAction()` per MarkdownView, stored in `WeakMap`. Icon + tooltip reflect file state; updates on state change.
+- [x] **Online modal** — `online-modal.ts`: two-panel Host/Join, transitions in-place on host click.
+- [x] **File explorer context menu** — `file-menu` event: "Make Collaborative" / "Go Online" / "Go Offline" / "Copy Room Code" / "Unlink".
+- [x] **Commands** — `make-collaborative`, `go-online`, `go-offline`, `copy-room-code`, `unlink-collaboration` via `editorCallback`.
+- [ ] **Unlink warning modal** — with "don't show again" checkbox, in-session Restore option. Deferred.
+- [ ] **Unlink undo cache** — hold UUID + Yjs in memory until editor closes; offer Restore. Deferred.
 
 ### N2: Identity
 
-- [ ] **Auto-generated names** — `generateName()` function combining adjective + animal lists. Used to produce the ~200 curated pairs baked into the source, and exposed for the dice-roll in settings. Assigned on first session if name not set in settings.
-- [ ] **Auto-generated colors** — binary space-filling around hue wheel: user 0 = 0° (red), 1 = 180° (cyan), 2 = 90°, 3 = 270°, etc. Covers 2–8 users with distinct, legible colors. Assigned by join order via awareness. Stored in settings.
-- [ ] **Dice-roll in settings** — button calls `generateName()` and picks the next unused hue slot, previews both. User can keep rolling until satisfied.
-- [ ] **Color + name stored in settings** — persist across sessions; don't reassign if already set.
+- [x] **Auto-generated names** — `generateName()` in `identity.ts` (adjective + animal).
+- [x] **Auto-generated colors** — `colorForPeerIndex()` with binary hue-wheel (0°, 180°, 90°, 270°, …).
+- [x] **Auto-generate on first session** — `ensureSettingsIdentity()` in main.ts assigns name + color before first `beginHosting` / `joinSession`.
+- [x] **Dice-roll in settings** — "Roll" button regenerates name + color, re-renders settings tab.
+- [x] **Color picker in settings** — native `addColorPicker`, identity preview swatch.
+
+### Deferred (document for next sprint)
+
+- **Diff-apply for offline edits** — requires `fast-diff` dep + Yjs transact. Most complex bootstrap case.
+- **Unlink warning modal** — "don't show again" with `unlinkWarningDismissed` settings field (field added, modal not yet built).
+- **Unlink undo cache / Restore** — hold `unlinkCache: { yjsData }` in `FileCollabInfo` until plugin unload.
+- **Returning joiner UUID match** — when going online on a file that already has a matching UUID, skip the awareness discovery step and go straight to session creation.
 
 ---
 

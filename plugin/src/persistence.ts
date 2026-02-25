@@ -1,46 +1,53 @@
-import { Vault } from "obsidian";
+import { App } from "obsidian";
 import * as Y from "yjs";
 
 /**
- * File-based Yjs persistence.
- * Stores binary Y.Doc state as `.md_crdt/{filename}.yjs` alongside the markdown file.
+ * UUID-keyed Yjs persistence in the plugin folder.
+ * Path: {vault}/.obsidian/plugins/obsidian-crdt-coeditor/yjs/{uuid}
+ *
+ * Stored in the plugin folder so Obsidian Sync replicates it alongside
+ * the markdown file (which carries the collab-id frontmatter UUID).
  */
 
-function crdtPath(filePath: string): string {
-  const dir = filePath.substring(0, filePath.lastIndexOf("/") + 1);
-  const basename = filePath.substring(filePath.lastIndexOf("/") + 1);
-  return `${dir}.md_crdt/${basename}.yjs`;
+function yjsPath(app: App, uuid: string): string {
+  return `${app.vault.configDir}/plugins/obsidian-crdt-coeditor/yjs/${uuid}`;
 }
 
 export async function loadYjsState(
-  vault: Vault,
-  filePath: string,
-  ydoc: Y.Doc
+  app: App,
+  uuid: string,
+  doc: Y.Doc
 ): Promise<boolean> {
-  const path = crdtPath(filePath);
+  const path = yjsPath(app, uuid);
   try {
-    const data = await vault.adapter.readBinary(path);
-    Y.applyUpdate(ydoc, new Uint8Array(data));
+    const data = await app.vault.adapter.readBinary(path);
+    Y.applyUpdate(doc, new Uint8Array(data));
     return true;
   } catch {
-    // No existing state file
     return false;
   }
 }
 
 export async function saveYjsState(
-  vault: Vault,
-  filePath: string,
-  ydoc: Y.Doc
+  app: App,
+  uuid: string,
+  doc: Y.Doc
 ): Promise<void> {
-  const path = crdtPath(filePath);
+  const path = yjsPath(app, uuid);
   const dir = path.substring(0, path.lastIndexOf("/"));
-
-  // Ensure .md_crdt directory exists
-  if (!(await vault.adapter.exists(dir))) {
-    await vault.adapter.mkdir(dir);
+  try {
+    await app.vault.adapter.mkdir(dir);
+  } catch {
+    // already exists
   }
+  const state = Y.encodeStateAsUpdate(doc);
+  await app.vault.adapter.writeBinary(path, state.buffer as ArrayBuffer);
+}
 
-  const state = Y.encodeStateAsUpdate(ydoc);
-  await vault.adapter.writeBinary(path, state.buffer as ArrayBuffer);
+export async function deleteYjsState(app: App, uuid: string): Promise<void> {
+  try {
+    await app.vault.adapter.remove(yjsPath(app, uuid));
+  } catch {
+    // file may not exist
+  }
 }
