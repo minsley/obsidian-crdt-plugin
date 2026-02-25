@@ -62,8 +62,8 @@ No permanent host/joiner distinction. Any peer with a Collaborative copy of a fi
 ### Host/Join UI (single modal, Option 1)
 
 Going Online presents one modal with two sections:
-- **Host button** (left): starts session, modal transitions in-place to show room code + copy button. Stays open until user closes or first peer connects.
-- **Join input** (right): enter room code, submit → spinner → closes on success.
+- **Host button** (left): starts session, modal transitions in-place to show room code + copy button. Room code remains visible until user explicitly closes the modal or clicks outside to dismiss. Does not auto-close on peer connect — user may want to share code with multiple people.
+- **Join input** (right): enter room code, submit → spinner replaces button → modal closes on successful sync.
 
 ### Unlink (working name)
 
@@ -99,9 +99,9 @@ Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Show
 
 ### N2: Identity
 
-- [ ] **Auto-generated names** — pre-baked list of ~200 `[Adjective] [Animal]` pairs. Assigned on first session if name not set.
-- [ ] **Auto-generated colors** — binary space-filling around hue wheel: user 0 = 0° (red), 1 = 180° (cyan), 2 = 90°, 3 = 270°, etc. Assigned by join order. Stored in awareness.
-- [ ] **Dice-roll in settings** — button to re-roll name + color, previews the new values.
+- [ ] **Auto-generated names** — `generateName()` function combining adjective + animal lists. Used to produce the ~200 curated pairs baked into the source, and exposed for the dice-roll in settings. Assigned on first session if name not set in settings.
+- [ ] **Auto-generated colors** — binary space-filling around hue wheel: user 0 = 0° (red), 1 = 180° (cyan), 2 = 90°, 3 = 270°, etc. Covers 2–8 users with distinct, legible colors. Assigned by join order via awareness. Stored in settings.
+- [ ] **Dice-roll in settings** — button calls `generateName()` and picks the next unused hue slot, previews both. User can keep rolling until satisfied.
 - [ ] **Color + name stored in settings** — persist across sessions; don't reassign if already set.
 
 ---
