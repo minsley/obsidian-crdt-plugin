@@ -9,7 +9,7 @@ export interface CRDTCoEditorSettings {
 }
 
 export const DEFAULT_SETTINGS: CRDTCoEditorSettings = {
-  signalingUrl: "wss://signaling.yjs.dev",
+  signalingUrl: "ws://localhost:4444",
   userName: "Anonymous",
   userColor: "#3B82F6",
   debugLogging: false,
