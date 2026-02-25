@@ -24,7 +24,7 @@ import {
 import { deleteYjsState } from "./persistence";
 import { generateName, colorForPeerIndex } from "./identity";
 import type { CollabState, FileCollabInfo } from "./collab-state";
-import { OnlineModal } from "./online-modal";
+import { OnlineModal, JoinModal } from "./online-modal";
 
 const ADJECTIVES = [
   "amber", "bold", "calm", "dark", "easy", "fast", "gold", "hazy",
@@ -79,6 +79,16 @@ export default class CRDTCoEditorPlugin extends Plugin {
     this.addSettingTab(new CRDTCoEditorSettingTab(this.app, this));
 
     this.registerEditorExtension(createCollabExtension(this));
+
+    this.addRibbonIcon("users", "Join collaboration session", () => {
+      new JoinModal(this.app, this).open();
+    });
+
+    this.addCommand({
+      id: "join-session",
+      name: "Join collaboration session",
+      callback: () => new JoinModal(this.app, this).open(),
+    });
 
     this.addCommand({
       id: "make-collaborative",

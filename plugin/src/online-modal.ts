@@ -2,6 +2,75 @@ import { App, Modal, Notice, Setting, TFile } from "obsidian";
 import type CRDTCoEditorPlugin from "./main";
 
 /**
+ * Standalone join modal — no existing file required.
+ * Used from the ribbon icon and the global "Join Session" command.
+ */
+export class JoinModal extends Modal {
+  constructor(app: App, private plugin: CRDTCoEditorPlugin) {
+    super(app);
+  }
+
+  onOpen() {
+    this.renderJoin();
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+
+  private renderJoin() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Join Collaboration" });
+    contentEl.createEl("p", { text: "Enter the room code shared by the host." });
+
+    let roomCode = "";
+    const setting = new Setting(contentEl)
+      .addText((t) =>
+        t
+          .setPlaceholder("amber-otter-42")
+          .onChange((v) => (roomCode = v.trim()))
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText("Join")
+          .setCta()
+          .onClick(() => this.doJoin(roomCode))
+      );
+
+    const textEl = setting.controlEl.querySelector("input");
+    if (textEl) {
+      textEl.addEventListener("keydown", (e: KeyboardEvent) => {
+        if (e.key === "Enter") this.doJoin(roomCode);
+      });
+      // Auto-focus
+      setTimeout(() => (textEl as HTMLInputElement).focus(), 50);
+    }
+  }
+
+  private async doJoin(roomCode: string) {
+    if (!roomCode) { new Notice("Enter a room code"); return; }
+
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Joining..." });
+    contentEl.createEl("p", { text: "Connecting to room..." });
+
+    try {
+      await this.plugin.joinSession(roomCode);
+      this.close();
+    } catch (e: any) {
+      contentEl.empty();
+      contentEl.createEl("h2", { text: "Failed to join" });
+      contentEl.createEl("p", { text: e.message });
+      new Setting(contentEl).addButton((btn) =>
+        btn.setButtonText("Back").onClick(() => this.renderJoin())
+      );
+    }
+  }
+}
+
+/**
  * Two-panel Host/Join modal.
  *
  * Host path: click Host → transitions in-place to show room code + Copy button.
