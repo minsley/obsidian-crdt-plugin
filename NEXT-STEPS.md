@@ -107,14 +107,46 @@ Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Show
 - [x] **Dice-roll in settings** — "Roll" button regenerates name + color, re-renders settings tab.
 - [x] **Color picker in settings** — native `addColorPicker`, identity preview swatch.
 
+### Known issues / session notes (2026-02-25)
+
+**Frontmatter / yCollab interaction (partially fixed, needs monitoring)**
+
+In Obsidian Live Preview, the CM6 editor document includes the YAML
+frontmatter block as raw text. yCollab binds to the full editor, so
+when the editor includes FM, yCollab syncs it into ytext. We strip FM
+from ytext before every file write and read FM fresh from disk instead.
+A no-op guard skips writes when content hasn't changed, breaking the
+duplication loop.
+
+Remaining risk: ytext may accumulate FM internally (Yjs state on disk
+will include it). This is invisible to users but could cause issues
+when peers with different UUIDs exchange Yjs state — their FMs would
+CRDT-merge in unpredictable ways. Proper fix: scope yCollab to the
+body range of the editor only, not the full document. Deferred.
+
 ### Deferred (document for next sprint)
 
+- **Scope yCollab to editor body only** — yCollab currently binds to the full CM6 editor doc which includes YAML frontmatter in Obsidian Live Preview. Need to offset yCollab's range by the FM length, or use a CM6 facet to exclude the FM region from the binding. This is the clean fix for the FM/ytext contamination.
 - **Diff-apply for offline edits** — requires `fast-diff` dep + Yjs transact. Most complex bootstrap case.
 - **Unlink warning modal** — "don't show again" with `unlinkWarningDismissed` settings field (field added, modal not yet built).
 - **Unlink undo cache / Restore** — hold `unlinkCache: { yjsData }` in `FileCollabInfo` until plugin unload.
 - **Returning joiner UUID match** — when going online on a file that already has a matching UUID, skip the awareness discovery step and go straight to session creation.
 
 ---
+
+## Next Design Session
+
+### 3 — UI polish
+- **3a. Modal layouts** — Host/Join panels feel cramped; needs proper spacing, hierarchy, and mobile-friendly layout.
+- **3b. State iconography** — offline/connecting/live/disconnecting icons need a coherent visual language. Current: users/radio-tower/wifi/loader. Revisit with a designer eye.
+- **3c. Local user cursor color** — collaborators see each other's colored cursors, but the local user has no visual indicator of their own color/name as others see it. Add a local cursor decoration or status bar badge showing "you are Amber Otter (●)".
+
+### 4 — Block-based CRDT
+Move from single Y.Text to Y.Array of blocks for better conflict reconciliation on paragraph-level edits. See F5 in Feature Roadmap.
+
+### 5 — Session continuity
+- **Rejoining without room code** — when a user opens an existing collab file and goes online, skip the awareness-discovery step (they already have the UUID). Just need to know a room code to join. Options: (a) host always shows their active room code somewhere accessible, (b) room code derived deterministically from UUID, (c) a "look for active session" mode that scans awareness.
+- **Host room code access** — once hosting, give the host an easy way to re-copy the room code without reopening the modal (e.g., header button tooltip, or a persistent status bar element showing the active code).
 
 ## Known Concerns / Investigate Later
 
