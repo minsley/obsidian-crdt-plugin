@@ -1,22 +1,21 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import { generateName, colorForPeerIndex } from "./identity";
 import type CRDTCoEditorPlugin from "./main";
 
 export interface CRDTCoEditorSettings {
-  serverUrl: string;
+  signalingUrl: string;
   userName: string;
   userColor: string;
   debugLogging: boolean;
-  collabPort: number;
-  collabHost: string;
+  unlinkWarningDismissed: boolean;
 }
 
 export const DEFAULT_SETTINGS: CRDTCoEditorSettings = {
-  serverUrl: "ws://localhost:1234",
-  userName: "Anonymous",
-  userColor: "#3B82F6",
+  signalingUrl: "ws://localhost:4444",
+  userName: "",
+  userColor: "",
   debugLogging: false,
-  collabPort: 1234,
-  collabHost: "0.0.0.0",
+  unlinkWarningDismissed: false,
 };
 
 export class CRDTCoEditorSettingTab extends PluginSettingTab {
@@ -34,82 +33,76 @@ export class CRDTCoEditorSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "Connection" });
 
     new Setting(containerEl)
-      .setName("WebSocket server URL")
-      .setDesc("URL of the y-websocket relay server (used when joining)")
-      .addText((text) =>
-        text
-          .setPlaceholder("ws://localhost:1234")
-          .setValue(this.plugin.settings.serverUrl)
-          .onChange(async (value) => {
-            this.plugin.settings.serverUrl = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Server port")
-      .setDesc("Port for the hosted collaboration server")
-      .addText((text) =>
-        text
-          .setPlaceholder("1234")
-          .setValue(String(this.plugin.settings.collabPort))
-          .onChange(async (value) => {
-            const port = parseInt(value, 10);
-            if (!isNaN(port) && port > 0 && port < 65536) {
-              this.plugin.settings.collabPort = port;
-              await this.plugin.saveSettings();
-            }
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Server bind address")
+      .setName("Signaling server URL")
       .setDesc(
-        "0.0.0.0 allows LAN connections; 127.0.0.1 restricts to this machine only"
+        "WebRTC signaling server for peer discovery. Default is the local self-hosted server."
       )
       .addText((text) =>
         text
-          .setPlaceholder("0.0.0.0")
-          .setValue(this.plugin.settings.collabHost)
+          .setPlaceholder("ws://localhost:4444")
+          .setValue(this.plugin.settings.signalingUrl)
           .onChange(async (value) => {
-            this.plugin.settings.collabHost = value;
+            this.plugin.settings.signalingUrl = value;
             await this.plugin.saveSettings();
           })
       );
 
     containerEl.createEl("h3", { text: "Identity" });
 
+    // Preview element shown next to the Roll button
+    const previewEl = containerEl.createDiv({ cls: "collab-identity-preview" });
+    this.renderIdentityPreview(previewEl);
+
     new Setting(containerEl)
       .setName("Display name")
-      .setDesc("Your name shown to other collaborators")
+      .setDesc(
+        "Your name shown to other collaborators. Leave blank to auto-generate on first session."
+      )
       .addText((text) =>
         text
-          .setPlaceholder("Anonymous")
+          .setPlaceholder("Will be auto-generated")
           .setValue(this.plugin.settings.userName)
           .onChange(async (value) => {
             this.plugin.settings.userName = value;
             await this.plugin.saveSettings();
+            this.renderIdentityPreview(previewEl);
           })
       );
 
     new Setting(containerEl)
       .setName("Cursor color")
-      .setDesc("Your cursor color shown to other collaborators")
-      .addText((text) =>
-        text
-          .setPlaceholder("#3B82F6")
-          .setValue(this.plugin.settings.userColor)
+      .setDesc("Your cursor color shown to other collaborators.")
+      .addColorPicker((picker) =>
+        picker
+          .setValue(this.plugin.settings.userColor || colorForPeerIndex(0))
           .onChange(async (value) => {
             this.plugin.settings.userColor = value;
             await this.plugin.saveSettings();
+            this.renderIdentityPreview(previewEl);
           })
+      );
+
+    new Setting(containerEl)
+      .setName("Roll new identity")
+      .setDesc("Generate a random name and color.")
+      .addButton((btn) =>
+        btn.setButtonText("Roll").onClick(async () => {
+          this.plugin.settings.userName = generateName();
+          this.plugin.settings.userColor =
+            colorForPeerIndex(Math.floor(Math.random() * 8));
+          await this.plugin.saveSettings();
+          // Re-render to update text fields and preview
+          this.display();
+        })
       );
 
     containerEl.createEl("h3", { text: "Advanced" });
 
     new Setting(containerEl)
       .setName("Debug logging")
-      .setDesc("Log verbose CRDT lifecycle events to the developer console")
+      .setDesc(
+        "Log verbose CRDT lifecycle events to the developer console"
+      )
       .addToggle((toggle) =>
         toggle
           .setValue(this.plugin.settings.debugLogging)
@@ -118,5 +111,15 @@ export class CRDTCoEditorSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+  }
+
+  private renderIdentityPreview(el: HTMLElement) {
+    el.empty();
+    const name = this.plugin.settings.userName || "(auto-generated)";
+    const color = this.plugin.settings.userColor || colorForPeerIndex(0);
+
+    const swatch = el.createSpan({ cls: "collab-color-swatch" });
+    swatch.style.backgroundColor = color;
+    el.createSpan({ text: name });
   }
 }

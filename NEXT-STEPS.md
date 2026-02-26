@@ -7,68 +7,150 @@
 - **M3: MCP sidecar** — 8 MCP tools (connect, read, replace, insert-after-heading, insert-after-pattern, append, disconnect, list-rooms). Claude Desktop connects, edits render in real-time with a labeled purple cursor using Yjs relative positions.
 - **Multi-user collab** — ribbon icon toggles hosting, command palette for join. Tested with 3 concurrent peers (1 host + 2 joiners).
 - **Debug logging** — toggleable via plugin settings, shared logger module.
-
-## Polish Hitlist
-
-### P0: Bugs / Correctness
-
-- [ ] **collabActive flag set before server starts** — `startCollab()` should only set `collabActive = true` after `serverManager.start()` succeeds. Same issue in `showJoinModal()`.
-- [ ] **Port-in-use handling** — if the port is already bound, the child process dies silently and we wait 5s for a health check timeout. Detect EADDRINUSE from child stderr and fail fast.
-- [ ] **Restart race condition** — rapid stop→start could bind the same port before the old process exits. Add cooldown or wait for proc exit.
-- [ ] **Flush pending writes on shutdown** — `stopCollab()` and `onunload()` should flush debounced `writeMarkdownFile()` calls before destroying sessions.
-- [ ] **Persistence error handling** — `saveYjsState()` has no try/catch; `loadYjsState()` swallows real I/O failures.
-
-### P1: Robustness
-
-- [ ] **WebSocket disconnect handling** — `provider.on("status")` to surface disconnection in status bar + Notice. y-websocket reconnects automatically but the user should know.
-- [ ] **Connection status in status bar** — show "Connecting...", "Disconnected (retrying)", etc. instead of just "Active".
-- [ ] **Room code validation** — reject empty/whitespace `roomName` in POST /rooms/create.
-- [ ] **Settings validation** — validate color as `#RRGGBB`, host as IP/hostname, port range 1024–65535.
-- [ ] **Server crash recovery** — if child process exits unexpectedly, offer to restart via Notice.
-
-### P2: UX Improvements
-
-- [ ] **Remote cursor CSS** — add `styles.css` with proper `.cm-ySelectionCaret` / `.cm-ySelectionInfo` styling.
-- [ ] **Collab indicator per file** — icon in file explorer or tab for files with active CRDT sessions.
-- [ ] **"Who's here" panel** — list of connected users + colors from awareness state.
-- [ ] **Join modal remembers last connection** — save recent `{ url, code }` pairs in settings.
-- [ ] **Keyboard shortcut for toggle** — bind a hotkey to start/stop collab.
-- [ ] **Notification when peer joins/leaves** — Notice on awareness changes.
-
-### P3: Automated Testing
-
-- [ ] **Unit tests: AgentDocumentSession** — replace, insertAfterPattern, insertAfterHeading, append. Pure Yjs, no network.
-- [ ] **Unit tests: RoomCodeRegistry** — create, lookup, remove, duplicate create.
-- [ ] **Unit tests: bootstrap ordering** — mock vault + Y.Doc, all 3 cases, verify `whenReady` resolves.
-- [ ] **Integration test: two-client sync** — server + two WebsocketProviders, verify cross-client edits.
-- [ ] **Integration test: MCP tools** — sidecar + server, call tools, verify edits appear in second client.
-- [ ] **Test harness** — vitest, shared fixtures for Y.Doc and server lifecycle.
+- **M4: WebRTC prototype** — y-webrtc peer-to-peer sync, self-hosted signaling server (`server/src/signaling.ts`), room codes as WebRTC room names, no embedded relay server needed.
+- **M5: Collaborative File Model** — UUID frontmatter identity (`collab-id`), UUID-keyed Yjs persistence in plugin folder (Obsidian Sync compatible), per-file `CollabState` machine, Host/Join modal with awareness-based UUID discovery, editor header buttons, file-menu entries, auto-generated adjective-animal names + hue-wheel colors.
 
 ---
 
-## Feature Roadmap
+## Architecture: Collaborative File Model (next major milestone)
 
-### F1: Presence & Identity
+This section captures the agreed design for the next major rework. Current WebRTC prototype is a stepping stone; this is the target architecture.
 
-Each collaborator is visually distinct and identifiable.
+### Mental model
 
-- [ ] **Per-user cursor colors** — hash username to derive color, or host assigns from a palette on join.
-- [ ] **Per-user selection highlights** — ensure each user sets `colorLight` matching their cursor color. Currently only sidecar sets it.
-- [ ] **Username labels on cursors** — y-codemirror.next renders on hover via `.cm-ySelectionInfo`. Consider always-visible or fade-after-move.
-- [ ] **"Who's here" sidebar** — panel or status bar popover listing users, colors, and current file. Built from awareness state.
-- [ ] **User avatars** — stretch. Initials circle or gravatar next to cursor labels.
+There are two distinct layers:
 
-### F2: Networking & Access Control
+**1. File type: Normal vs Collaborative**
+A Collaborative file is a different kind of file from the user's perspective. It has a `collab-id` UUID in its frontmatter. This UUID is the stable identity of the document across all peers, devices, and renames. The file remains Collaborative indefinitely — it does not revert to Normal when a session ends.
 
-Move beyond localhost to support remote collaboration with identity.
+**2. Session state: Offline / Online toggle (Collaborative files only)**
+The Online/Offline toggle lives in the editor UI for Collaborative files. It has transient states:
 
-- [ ] **Relay server deployment** — Docker image or one-click deploy (Fly.io / Railway).
-- [ ] **TLS support** — `wss://` via reverse proxy (Caddy/nginx) or native TLS.
-- [ ] **Token-based auth** — server generates session token on host start. Embedded in room code or shared separately.
-- [ ] **Email-based invitations** — generate invite links with server URL + room code + token.
-- [ ] **Invite by username** — user registry, push notifications for pending invites.
-- [ ] **Access levels** — read-only vs read-write, enforced server-side.
-- [ ] **Persistent room metadata** — survive server restarts for long-lived sessions.
+```
+Offline → Connecting → Live (0 peers) ↔ Live (N peers) → Disconnecting → Offline
+```
+
+- **Offline**: has UUID, Yjs state saved, no network activity
+- **Connecting**: WebRTC handshake in progress (system-driven transient)
+- **Live (0 peers)**: session open, no peers yet — user-actionable, can wait or go offline
+- **Live (N peers)**: active collaboration
+- **Disconnecting**: flushing writes, saving Yjs state, closing WebRTC (system-driven transient)
+
+### Data model
+
+- **Frontmatter**: `collab-id: <uuid>` — file identity, travels with the file on rename/move/sync
+- **Yjs state**: `.obsidian/plugins/obsidian-crdt-coeditor/yjs/<uuid>` — keyed by UUID, not file path; synced by Obsidian Sync automatically
+- **Plugin settings**: signaling URL, user identity (name + color)
+- **Room codes**: ephemeral, generated fresh each hosting session, not persisted
+
+### Bootstrap / join logic
+
+On session start, always compare `.yjs`-rendered content to current `.md`:
+- Match → use `.yjs` (incremental reconnect, shared history intact)
+- Mismatch → `.md` was edited outside a session → diff-apply changes to Yjs as new operations on top of shared history
+
+On joining with a room code:
+1. Host sends `{ type: 'doc-meta', uuid, filename }` as first WebRTC message before Yjs sync
+2. Joiner searches vault frontmatter for matching `collab-id`
+   - **Found + Yjs state exists**: open file, diff-apply any offline edits, sync
+   - **Found + no Yjs state**: alert user ("shared history not found — starting fresh copy from host"), receive host state
+   - **Not found**: create new file with UUID in frontmatter, receive host state
+
+### Peer symmetry
+
+No permanent host/joiner distinction. Any peer with a Collaborative copy of a file can host a new session or join one. The CRDT reconciles regardless.
+
+### Host/Join UI (single modal, Option 1)
+
+Going Online presents one modal with two sections:
+- **Host button** (left): starts session, modal transitions in-place to show room code + copy button. Room code remains visible until user explicitly closes the modal or clicks outside to dismiss. Does not auto-close on peer connect — user may want to share code with multiple people.
+- **Join input** (right): enter room code, submit → spinner replaces button → modal closes on successful sync.
+
+### Unlink (working name)
+
+Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Shows a warning modal with "don't show again" checkbox (stored in settings). Until the editor is closed, the UUID + Yjs are held in memory and a "Restore Collab" option is offered. After close, unrecoverable (user's own backup tools apply).
+
+### UI surfaces
+
+- **Editor pane header button** — `view.addAction()` on MarkdownView. Icon reflects file state. Primary interaction surface.
+- **Right-click in file explorer** — `workspace.on('file-menu')`. "Make Collaborative" on Normal files; "Copy Room Code", "Go Online", "Unlink" on Collaborative files.
+- **Editor context menu** — `workspace.on('editor-menu')`. Same as above for the body of the editor.
+- **Commands (Cmd+P)** — use `editorCallback` (scoped to focused file). "Make Collaborative", "Go Online / Go Offline", "Copy Room Code", "Unlink".
+
+---
+
+## Implementation Tasks (next milestone)
+
+### N0: Core architecture
+
+- [x] **UUID frontmatter read/write** — `getCollabId`, `setCollabId`, `removeCollabId`, `findFileByCollabId` in `frontmatter.ts`.
+- [x] **Yjs storage migration** — UUID-keyed binary files in `.obsidian/plugins/obsidian-crdt-coeditor/yjs/{uuid}`. `persistence.ts` updated; old `.md_crdt` sidecar approach removed.
+- [x] **docMeta in awareness** — host sets `{ uuid, filename }` in awareness so joiners discover UUID via WebRTC awareness API.
+- [x] **Join flow: UUID lookup** — `discoverUuid(roomCode)` waits for awareness docMeta; `findFileByCollabId` searches vault; creates new file if not found.
+- [x] **Session state machine** — `CollabState` type + `FileCollabInfo` in `collab-state.ts`; `collabFiles: Map<string, FileCollabInfo>` replaces `collabActive` + `sessions`.
+- [x] **Bootstrap: diff-apply for offline edits** — if `.yjs` content ≠ `.md`, apply diff as Yjs text operations via `fast-diff`.
+
+### N1: UI
+
+- [x] **Editor header button** — `view.addAction()` per MarkdownView, stored in `WeakMap`. Icon + tooltip reflect file state; updates on state change.
+- [x] **Online modal** — `online-modal.ts`: two-panel Host/Join, transitions in-place on host click.
+- [x] **File explorer context menu** — `file-menu` event: "Make Collaborative" / "Go Online" / "Go Offline" / "Copy Room Code" / "Unlink".
+- [x] **Commands** — `make-collaborative`, `go-online`, `go-offline`, `copy-room-code`, `unlink-collaboration` via `editorCallback`.
+- [x] **Unlink warning modal** — with "don't show again" checkbox. `unlink-modal.ts`.
+- [x] **Unlink undo cache** — caches Yjs binary in memory; "Undo" link in notice + "Restore Collaboration" context menu.
+
+### N2: Identity
+
+- [x] **Auto-generated names** — `generateName()` in `identity.ts` (adjective + animal).
+- [x] **Auto-generated colors** — `colorForPeerIndex()` with binary hue-wheel (0°, 180°, 90°, 270°, …).
+- [x] **Auto-generate on first session** — `ensureSettingsIdentity()` in main.ts assigns name + color before first `beginHosting` / `joinSession`.
+- [x] **Dice-roll in settings** — "Roll" button regenerates name + color, re-renders settings tab.
+- [x] **Color picker in settings** — native `addColorPicker`, identity preview swatch.
+
+### Known issues / session notes (2026-02-25)
+
+**Frontmatter / yCollab interaction — RESOLVED**
+
+FM-aware sync plugins (`fmAwareYSync`, `fmAwareRemoteSelections`,
+`fmEndField`) offset all positions by FM length, so ytext never
+contains frontmatter. Bootstrap strips any legacy FM remnants from
+ytext before diff-apply.
+
+### Deferred (document for next sprint)
+
+- ~~**Scope yCollab to editor body only**~~ — Done: FM-aware sync plugins (`fmAwareYSync`, `fmAwareRemoteSelections`, `fmEndField`) offset all positions by FM length.
+- ~~**Diff-apply for offline edits**~~ — Done: `applyDiffToYText` in `diff-apply.ts` via `fast-diff`.
+- ~~**Unlink warning modal**~~ — Done: `unlink-modal.ts` with "don't show again" checkbox.
+- ~~**Unlink undo cache / Restore**~~ — Done: `unlinkCaches` map in main.ts; notice Undo link + context menu Restore.
+- ~~**Returning joiner UUID match**~~ — Done: `joinSession(roomCode, knownFile?)` skips `discoverUuid` when file has UUID.
+
+---
+
+## Next Design Session
+
+### 3 — UI polish
+- **3a. Modal layouts** — Host/Join panels feel cramped; needs proper spacing, hierarchy, and mobile-friendly layout.
+- **3b. State iconography** — offline/connecting/live/disconnecting icons need a coherent visual language. Current: users/radio-tower/wifi/loader. Revisit with a designer eye.
+- **3c. Local user cursor color** — collaborators see each other's colored cursors, but the local user has no visual indicator of their own color/name as others see it. Add a local cursor decoration or status bar badge showing "you are Amber Otter (●)".
+- **3d. Stable local cursor on remote edits** — when a remote peer types above your cursor, your cursor gets pushed/pulled. Use Yjs relative positions to map the local selection through remote changes, preserving the user's logical position in the document.
+- **3e. Joiner empty-editor flash** — first-time joiner bootstraps with ytext=0 and attaches CM6 before remote content arrives, causing a brief empty-editor flash. Could defer attach until ytext is non-empty (with a timeout fallback for genuinely empty docs).
+
+### 4 — Block-based CRDT
+Move from single Y.Text to Y.Array of blocks for better conflict reconciliation on paragraph-level edits. See F5 in Feature Roadmap.
+
+### 5 — Session continuity
+- **Rejoining without room code** — when a user opens an existing collab file and goes online, skip the awareness-discovery step (they already have the UUID). Just need to know a room code to join. Options: (a) host always shows their active room code somewhere accessible, (b) room code derived deterministically from UUID, (c) a "look for active session" mode that scans awareness.
+- **Host room code access** — once hosting, give the host an easy way to re-copy the room code without reopening the modal (e.g., header button tooltip, or a persistent status bar element showing the active code).
+
+## Known Concerns / Investigate Later
+
+- [ ] **Obsidian Sync 5MB file limit** — Yjs state for text notes is small (typically 2–20 KB), but could become relevant for long-lived sessions with large edit histories, binary attachments, or future whole-vault collaboration. Investigate limits and add a soft warning if Yjs state approaches 1MB.
+- [ ] **Signaling server public deployment** — currently defaults to `ws://localhost:4444` for local dev. Once a hosted instance exists, update `DEFAULT_SETTINGS.signalingUrl`. Track deployment in a separate infra doc.
+- [ ] **WebRTC TURN server** — ~15–20% of connections (symmetric NAT, corporate networks) will fail without a TURN relay. Free tiers exist (Open Relay, Metered.ca). Evaluate when NAT failures become user-reported.
+
+---
+
+## Feature Roadmap (unchanged / longer-term)
 
 ### F3: Claude Integration
 
@@ -96,7 +178,6 @@ Make Claude a first-class collaborator.
 
 ### F4: Canonical Document & Conflict Resolution
 
-- [ ] **Host is canonical** — host's LevelDB is source of truth for recovery.
 - [ ] **Conflict markers** — brief highlight + Notice when concurrent edits merge in the same region.
 - [ ] **Edit attribution** — map Yjs client IDs → usernames via awareness, render as subtle per-line background.
 - [ ] **Version snapshots** — periodic Y.Doc snapshots, named entries in a Y.Array, rollback support.
@@ -110,25 +191,3 @@ Move from single Y.Text to structured document model.
 - [ ] **CM6 block binding** — per-block yCollab binding instead of whole-document.
 - [ ] **Structural conflict safety** — paragraph reordering doesn't corrupt text within blocks.
 - [ ] **Migration** — backwards compatible with existing single-Y.Text documents.
-
----
-
-## Implementation Priority
-
-**Near-term (next sessions):**
-1. P0 bugs — correctness fixes for collab lifecycle
-2. F1 presence basics — per-user colors, selection highlights, username visibility
-3. P1 robustness — disconnect handling, status bar states
-4. P2 UX — cursor CSS, who's here panel
-
-**Medium-term:**
-5. F3 Claude basics — invite command, thinking indicator, settle heuristic
-6. F3 suggestion mode — highest-value Claude feature
-7. P3 automated tests
-8. F2 networking basics — TLS, token auth
-
-**Longer-term:**
-9. F2 email invitations, user registry
-10. F4 conflict resolution, version snapshots
-11. F5 block-level CRDT
-12. F3 sidebar chat, streaming edits

@@ -1,0 +1,92 @@
+/* ── Modal layout (3a) ─────────────────────────────────── */
+
+.collab-online-panels {
+  display: flex;
+  gap: 16px;
+}
+
+@media (max-width: 500px) {
+  .collab-online-panels {
+    flex-direction: column;
+  }
+}
+
+.collab-panel {
+  flex: 1;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.collab-panel h3 {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+
+.collab-panel p {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+
+.collab-panel-divider {
+  display: none;
+}
+
+.collab-room-code-display {
+  text-align: center;
+  margin: 16px 0;
+}
+
+.collab-room-code-display code {
+  font-size: 1.4em;
+  color: var(--text-accent);
+  padding: 8px 16px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+}
+
+/* ── State iconography (3b) ───────────────────────────── */
+
+@keyframes collab-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.collab-state-connecting .svg-icon,
+.collab-state-disconnecting .svg-icon {
+  animation: collab-spin 1s linear infinite;
+}
+
+.collab-state-live .svg-icon {
+  color: var(--text-success, #28a745);
+}
+
+.collab-state-offline .svg-icon {
+  color: var(--text-muted);
+}
+
+/* ── Status bar (3c) ──────────────────────────────────── */
+
+.collab-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.collab-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.collab-status-name {
+  font-weight: 500;
+}
+
+.collab-status-peers {
+  color: var(--text-muted);
+}

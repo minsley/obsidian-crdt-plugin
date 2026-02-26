@@ -35,6 +35,16 @@ const dedupeYjsPlugin = {
         return undefined;
       }
     });
+    // Allow subpath imports into y-codemirror.next/src/* (bypasses exports map)
+    const yCodemirrorPath = path.dirname(
+      require.resolve("y-codemirror.next/package.json")
+    );
+    build.onResolve(
+      { filter: /^y-codemirror\.next\/src\// },
+      (args) => ({
+        path: path.join(yCodemirrorPath, args.path.replace("y-codemirror.next/", "")),
+      })
+    );
   },
 };
 
