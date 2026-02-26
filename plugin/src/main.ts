@@ -368,58 +368,74 @@ export default class CRDTCoEditorPlugin extends Plugin {
     const { uuid, filename } = await this.discoverUuid(roomCode);
     log(`joinSession: discovered uuid=${uuid} filename=${filename} room=${roomCode}`);
 
-    // Find or create the file with this UUID
-    let file = findFileByCollabId(this.app, uuid);
-    if (!file) {
-      // Use the host's filename (strip .md suffix for dedup logic)
-      const baseName = filename.replace(/\.md$/, "");
-      let filePath = `${baseName}.md`;
-      let n = 2;
-      while (this.app.vault.getAbstractFileByPath(filePath)) {
-        filePath = `${baseName}-${n++}.md`;
+    let file: TFile | null = null;
+    let fileCreated = false;
+    let session: WebRTCSession | undefined;
+
+    try {
+      // Find or create the file with this UUID
+      file = findFileByCollabId(this.app, uuid);
+      if (!file) {
+        const baseName = filename.replace(/\.md$/, "");
+        let filePath = `${baseName}.md`;
+        let n = 2;
+        while (this.app.vault.getAbstractFileByPath(filePath)) {
+          filePath = `${baseName}-${n++}.md`;
+        }
+        file = await this.app.vault.create(filePath, "");
+        fileCreated = true;
+        await setCollabId(this.app, file, uuid);
+        debug(`joinSession: created new file ${filePath}`);
+      } else {
+        debug(`joinSession: found existing file ${file.path}`);
       }
-      file = await this.app.vault.create(filePath, "");
-      await setCollabId(this.app, file, uuid);
-      debug(`joinSession: created new file ${filePath}`);
-    } else {
-      debug(`joinSession: found existing file ${file.path}`);
-    }
 
-    // Open file in editor
-    const leaf = this.app.workspace.getLeaf(false);
-    await leaf.openFile(file);
+      // Open file in editor
+      const leaf = this.app.workspace.getLeaf(false);
+      await leaf.openFile(file);
 
-    // Ensure state entry
-    if (!this.collabFiles.has(file.path)) {
-      this.collabFiles.set(file.path, { uuid, state: "offline", peerCount: 0 });
-    }
-
-    const session = new WebRTCSession(
-      this.app,
-      file,
-      uuid,
-      roomCode,
-      this.settings
-    );
-
-    const filePath = file.path;
-    session.on("peers", (count) => {
-      const i = this.collabFiles.get(filePath);
-      if (i) {
-        i.peerCount = count;
-        this.updateHeaderButtonsForFile(file!);
+      // Ensure state entry
+      if (!this.collabFiles.has(file.path)) {
+        this.collabFiles.set(file.path, { uuid, state: "offline", peerCount: 0 });
       }
-    });
 
-    const info = this.collabFiles.get(file.path)!;
-    info.session = session;
-    info.roomCode = roomCode;
-    info.state = "live";
-    info.peerCount = 0;
+      session = new WebRTCSession(
+        this.app,
+        file,
+        uuid,
+        roomCode,
+        this.settings
+      );
 
-    this.syncHeaderButtons();
-    new Notice(`Joined room: ${roomCode}`);
-    log(`joinSession: connected to ${file.path} room=${roomCode}`);
+      const filePath = file.path;
+      session.on("peers", (count) => {
+        const i = this.collabFiles.get(filePath);
+        if (i) {
+          i.peerCount = count;
+          this.updateHeaderButtonsForFile(file!);
+        }
+      });
+
+      const info = this.collabFiles.get(file.path)!;
+      info.session = session;
+      info.roomCode = roomCode;
+      info.state = "live";
+      info.peerCount = 0;
+
+      this.syncHeaderButtons();
+      new Notice(`Joined room: ${roomCode}`);
+      log(`joinSession: connected to ${file.path} room=${roomCode}`);
+    } catch (e) {
+      warn(`joinSession failed: ${e}`);
+      if (session) session.destroy();
+      if (file) {
+        this.collabFiles.delete(file.path);
+        if (fileCreated) {
+          await this.app.vault.delete(file).catch(() => {});
+        }
+      }
+      throw e;
+    }
   }
 
   // Discover the UUID and filename for a room code by listening to peer awareness
@@ -427,12 +443,15 @@ export default class CRDTCoEditorPlugin extends Plugin {
     roomCode: string
   ): Promise<{ uuid: string; filename: string }> {
     return new Promise((resolve, reject) => {
+      let settled = false;
       const tempDoc = new Y.Doc();
       const tempProvider = new WebrtcProvider(roomCode, tempDoc, {
         signaling: [this.settings.signalingUrl],
       });
 
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         cleanup();
         reject(new Error("Timeout: no host found in room (10s)"));
       }, 10_000);
@@ -445,9 +464,11 @@ export default class CRDTCoEditorPlugin extends Plugin {
       };
 
       const check = () => {
+        if (settled) return;
         for (const [, state] of tempProvider.awareness.getStates()) {
           const meta = (state as any).docMeta;
           if (meta?.uuid) {
+            settled = true;
             cleanup();
             resolve({ uuid: meta.uuid, filename: meta.filename ?? meta.uuid });
             return;
@@ -456,6 +477,8 @@ export default class CRDTCoEditorPlugin extends Plugin {
       };
 
       tempProvider.awareness.on("change", check);
+      // Check immediately in case awareness states are already populated
+      check();
     });
   }
 

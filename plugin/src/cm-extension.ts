@@ -1,10 +1,23 @@
 import { ViewPlugin, ViewUpdate, EditorView, keymap } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
-import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
+import { ySyncFacet, YSyncConfig, yUndoManagerKeymap } from "y-codemirror.next";
+import {
+  yUndoManagerFacet,
+  YUndoManagerConfig,
+  yUndoManager,
+  undo,
+  redo,
+} from "y-codemirror.next/src/y-undomanager.js";
 import * as Y from "yjs";
 import { debug } from "./log";
 import type CRDTCoEditorPlugin from "./main";
 import type { WebRTCSession } from "./webrtc-session";
+import { fmEndField, frontmatterEndIndex } from "./fm-offset";
+import { fmAwareYSync } from "./fm-y-sync";
+import {
+  fmRemoteSelectionsTheme,
+  fmAwareRemoteSelections,
+} from "./fm-remote-selections";
 
 /**
  * CM6 extension that dynamically binds the correct Y.Text per editor view
@@ -89,26 +102,46 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
         session: { ytext: Y.Text; provider: { awareness: any } },
         filePath: string
       ) {
+        const ySyncConfig = new YSyncConfig(
+          session.ytext,
+          session.provider.awareness
+        );
         const undoManager = new Y.UndoManager(session.ytext);
         const extensions = [
-          ...yCollab(session.ytext, session.provider.awareness, {
-            undoManager,
+          fmEndField,
+          ySyncFacet.of(ySyncConfig),
+          fmAwareYSync,
+          fmRemoteSelectionsTheme,
+          fmAwareRemoteSelections,
+          yUndoManagerFacet.of(new YUndoManagerConfig(undoManager)),
+          yUndoManager,
+          EditorView.domEventHandlers({
+            beforeinput(e: InputEvent, view: EditorView) {
+              if (e.inputType === "historyUndo") return undo(view);
+              if (e.inputType === "historyRedo") return redo(view);
+              return false;
+            },
           }),
           keymap.of(yUndoManagerKeymap),
         ];
 
+        // Compare only the body (after frontmatter) to ytext.
+        // Use frontmatterEndIndex directly since fmEndField isn't in
+        // the state yet (it gets added in the reconfigure below).
+        const editorDoc = this.view.state.doc.toString();
+        const fmEnd = frontmatterEndIndex(editorDoc);
+        const editorBody = editorDoc.slice(fmEnd);
         const ytextContent = session.ytext.toString();
-        const editorContent = this.view.state.doc.toString();
         debug(
-          `[cm] attachSession(${filePath}): ytext=${ytextContent.length}, editor=${editorContent.length}, match=${editorContent === ytextContent}`
+          `[cm] attachSession(${filePath}): ytext=${ytextContent.length}, body=${editorBody.length}, match=${editorBody === ytextContent}`
         );
 
-        if (editorContent !== ytextContent) {
-          debug(`[cm] replacing editor content with ytext`);
+        if (editorBody !== ytextContent) {
+          debug(`[cm] replacing editor body with ytext`);
           this.view.dispatch({
             changes: {
-              from: 0,
-              to: editorContent.length,
+              from: fmEnd,
+              to: editorDoc.length,
               insert: ytextContent,
             },
           });
@@ -117,7 +150,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
         this.view.dispatch({
           effects: compartment.reconfigure(extensions),
         });
-        debug(`[cm] yCollab attached for ${filePath}`);
+        debug(`[cm] FM-aware yCollab attached for ${filePath}`);
       }
 
       private detach() {

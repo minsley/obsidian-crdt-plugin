@@ -6,22 +6,58 @@ import { log, debug, warn } from "./log";
 import type { CRDTCoEditorSettings } from "./settings";
 import type { CollabState } from "./collab-state";
 
-/** Strip YAML frontmatter block so ytext only holds document body. */
+/**
+ * Find the index just past the closing `---\n` of a YAML frontmatter block.
+ * Returns 0 if there is no valid frontmatter.
+ *
+ * Rules:
+ * - File must start with `---` followed by \n or \r\n
+ * - Closing `---` must be at the start of a line (not inside a value)
+ * - Handles CRLF line endings
+ */
+export function frontmatterEndIndex(content: string): number {
+  // Must start with --- followed by newline
+  if (!content.startsWith("---")) return 0;
+  const firstNl = content.indexOf("\n");
+  if (firstNl === -1) return 0;
+  // The opening line must be just `---` (possibly with \r)
+  const opening = content.slice(0, firstNl);
+  if (opening !== "---" && opening !== "---\r") return 0;
+
+  // Search for closing --- at start of a line
+  let i = firstNl + 1;
+  while (i < content.length) {
+    const lineEnd = content.indexOf("\n", i);
+    const line =
+      lineEnd === -1 ? content.slice(i) : content.slice(i, lineEnd);
+    const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (trimmed === "---") {
+      // Return index just past closing ---\n (or end of string)
+      return lineEnd === -1 ? content.length : lineEnd + 1;
+    }
+    if (lineEnd === -1) break;
+    i = lineEnd + 1;
+  }
+  return 0; // no closing --- found
+}
+
+/** Strip YAML frontmatter block(s) so ytext only holds document body. */
 export function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return content;
-  const end = content.indexOf("\n---", 3);
-  if (end === -1) return content;
-  const after = end + 4; // skip past '\n---'
-  return content[after] === "\n" ? content.slice(after + 1) : content.slice(after);
+  let result = content;
+  // Loop to strip multiple accumulated FM blocks (can happen from CRDT merge)
+  let safety = 10;
+  while (safety-- > 0) {
+    const end = frontmatterEndIndex(result);
+    if (end === 0) break;
+    result = result.slice(end);
+  }
+  return result;
 }
 
 /** Extract the YAML frontmatter block (including trailing newline), or "". */
-function extractFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return "";
-  const end = content.indexOf("\n---", 3);
-  if (end === -1) return "";
-  const after = end + 4;
-  return content[after] === "\n" ? content.slice(0, after + 1) : content.slice(0, after);
+export function extractFrontmatter(content: string): string {
+  const end = frontmatterEndIndex(content);
+  return end === 0 ? "" : content.slice(0, end);
 }
 
 type EventMap = {
@@ -45,6 +81,8 @@ export class WebRTCSession {
   private _selfWriteUntil = 0;
   private _destroyed = false;
   readonly whenReady: Promise<void>;
+  private _awarenessHandler: () => void;
+  private _ytextObserver: () => void;
 
   private listeners = new Map<string, Function[]>();
 
@@ -82,16 +120,18 @@ export class WebRTCSession {
       filename: file.name,
     });
 
-    this.provider.awareness.on("change", () => {
+    this._awarenessHandler = () => {
       const count = this.provider.awareness.getStates().size - 1; // exclude self
       this.emit("peers", Math.max(0, count));
-    });
+    };
+    this.provider.awareness.on("change", this._awarenessHandler);
 
-    this.ytext.observe(() => {
+    this._ytextObserver = () => {
       if (!this._destroyed) {
         this.debouncedWriteMarkdown();
       }
-    });
+    };
+    this.ytext.observe(this._ytextObserver);
 
     this.whenReady = this.bootstrap();
   }
@@ -142,16 +182,18 @@ export class WebRTCSession {
   private async writeMarkdownFile(): Promise<void> {
     if (this._destroyed) return;
 
-    // yCollab may sync frontmatter from the Obsidian editor into ytext — always strip it.
-    // Read FM fresh from disk so we never lose it and never duplicate it.
+    // With FM-aware ySync, ytext should never contain frontmatter.
+    // Strip defensively for old Yjs state files that accumulated FM pre-migration.
     const current = await this.app.vault.read(this.file);
     const fm = extractFrontmatter(current);
-    const body = stripFrontmatter(this.ytext.toString());
+    const raw = this.ytext.toString();
+    const body = stripFrontmatter(raw);
+    if (body !== raw) {
+      debug(`writeMarkdownFile: stripped FM from ytext (migration from old state)`);
+    }
     const content = fm + body;
 
-    // No-op guard: if nothing changed, skip the write entirely.
-    // This breaks the FM-duplication loop: writing FM+body → editor reload → yCollab
-    // inserts FM into ytext → we strip it here → same content → no write → loop stops.
+    // No-op guard: skip write if content hasn't changed.
     if (content === current) {
       await saveYjsState(this.app, this.uuid, this.ydoc);
       return;
@@ -175,6 +217,8 @@ export class WebRTCSession {
     debug(`[${this.file.path}] WebRTCSession destroyed`);
     this._destroyed = true;
     this.debouncedWriteMarkdown.cancel?.();
+    this.ytext.unobserve(this._ytextObserver);
+    this.provider.awareness.off("change", this._awarenessHandler);
     this.provider.awareness.setLocalState(null);
     this.provider.disconnect();
     this.provider.destroy();
