@@ -48,9 +48,9 @@ function generateRoomCode(): string {
 
 function stateIcon(state: CollabState): string {
   switch (state) {
-    case "offline":      return "radio-tower";
+    case "offline":      return "wifi-off";
     case "connecting":   return "loader";
-    case "live":         return "wifi";
+    case "live":         return "radio-tower";
     case "disconnecting": return "loader";
   }
 }
@@ -593,6 +593,9 @@ export default class CRDTCoEditorPlugin extends Plugin {
     const uuid = getCollabId(this.app, file);
     btn.style.display = "";
 
+    // Clear previous state classes
+    btn.removeClass("collab-state-offline", "collab-state-connecting", "collab-state-live", "collab-state-disconnecting");
+
     if (!uuid) {
       setIcon(btn, "users");
       btn.ariaLabel = "Make Collaborative";
@@ -601,6 +604,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
       const state: CollabState = info?.state ?? "offline";
       setIcon(btn, stateIcon(state));
       btn.ariaLabel = stateTooltip(state, info?.peerCount ?? 0);
+      btn.addClass(`collab-state-${state}`);
     }
   }
 
