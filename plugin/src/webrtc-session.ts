@@ -61,6 +61,7 @@ export class WebRTCSession {
       .catch((err) => {
         warn(`Session bootstrap failed for ${file.path}: ${err}`);
         this.destroy();
+        throw err;
       });
   }
 

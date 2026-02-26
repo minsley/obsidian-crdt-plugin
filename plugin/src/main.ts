@@ -456,6 +456,13 @@ export default class CRDTCoEditorPlugin extends Plugin {
         info.state = "live";
         this.syncHeaderButtons();
       }
+    }).catch(() => {
+      if (info.state === "connecting") {
+        info.state = "offline";
+        info.session = undefined;
+        info.roomCode = undefined;
+        this.syncHeaderButtons();
+      }
     });
 
     log(`beginHosting: ${file.path} room=${roomCode}`);
@@ -556,6 +563,13 @@ export default class CRDTCoEditorPlugin extends Plugin {
           info.state = "live";
           this.syncHeaderButtons();
           new Notice(`Joined room: ${roomCode}`);
+        }
+      }).catch(() => {
+        if (info.state === "connecting") {
+          info.state = "offline";
+          info.session = undefined;
+          info.roomCode = undefined;
+          this.syncHeaderButtons();
         }
       });
 
