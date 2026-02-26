@@ -25,6 +25,7 @@ import { deleteYjsState } from "./persistence";
 import { generateName, colorForPeerIndex } from "./identity";
 import type { CollabState, FileCollabInfo } from "./collab-state";
 import { OnlineModal, JoinModal } from "./online-modal";
+import { UnlinkWarningModal } from "./unlink-modal";
 
 const ADJECTIVES = [
   "amber", "bold", "calm", "dark", "easy", "fast", "gold", "hazy",
@@ -301,6 +302,16 @@ export default class CRDTCoEditorPlugin extends Plugin {
     if (!uuid) {
       new Notice("File is not collaborative");
       return;
+    }
+
+    // Show warning modal unless user has dismissed it
+    if (!this.settings.unlinkWarningDismissed) {
+      const { proceed, dismiss } = await new UnlinkWarningModal(this.app).open();
+      if (dismiss) {
+        this.settings.unlinkWarningDismissed = true;
+        await this.saveSettings();
+      }
+      if (!proceed) return;
     }
 
     const info = this.collabFiles.get(file.path);
