@@ -1,6 +1,8 @@
 import { ViewPlugin, EditorView, ViewUpdate } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
 import { ySyncFacet } from "y-codemirror.next";
 import { ySyncAnnotation } from "y-codemirror.next/src/y-sync.js";
+import * as Y from "yjs";
 import { fmEndField } from "./fm-offset";
 import { debug } from "./log";
 
@@ -15,6 +17,19 @@ import { debug } from "./log";
 class FmAwareYSyncValue {
   private conf = this.view.state.facet(ySyncFacet);
   private _ytext = this.conf.ytext;
+  private _savedRelPos: { anchor: Y.RelativePosition; head: Y.RelativePosition } | null = null;
+
+  private _beforeTxn = (txn: Y.Transaction) => {
+    if (txn.origin === this.conf) return;
+    const fmEnd = this.view.state.field(fmEndField);
+    const sel = this.view.state.selection.main;
+    const anchorIdx = Math.max(0, sel.anchor - fmEnd);
+    const headIdx = Math.max(0, sel.head - fmEnd);
+    this._savedRelPos = {
+      anchor: Y.createRelativePositionFromTypeIndex(this._ytext, anchorIdx),
+      head: Y.createRelativePositionFromTypeIndex(this._ytext, headIdx),
+    };
+  };
 
   private _observer = (event: any, tr: any) => {
     if (tr.origin !== this.conf) {
@@ -42,11 +57,29 @@ class FmAwareYSyncValue {
           changes,
           annotations: [ySyncAnnotation.of(this.conf)],
         });
+
+        if (this._savedRelPos) {
+          const newFmEnd = this.view.state.field(fmEndField);
+          const doc = this._ytext.doc!;
+          const anchorAbs = Y.createAbsolutePositionFromRelativePosition(this._savedRelPos.anchor, doc);
+          const headAbs = Y.createAbsolutePositionFromRelativePosition(this._savedRelPos.head, doc);
+          if (anchorAbs && headAbs) {
+            const docLen = this.view.state.doc.length;
+            const anchor = Math.min(anchorAbs.index + newFmEnd, docLen);
+            const head = Math.min(headAbs.index + newFmEnd, docLen);
+            this.view.dispatch({
+              selection: EditorSelection.single(anchor, head),
+              annotations: [ySyncAnnotation.of(this.conf)],
+            });
+          }
+          this._savedRelPos = null;
+        }
       }
     }
   };
 
   constructor(private view: EditorView) {
+    this._ytext.doc!.on("beforeTransaction", this._beforeTxn);
     this._ytext.observe(this._observer);
   }
 
@@ -91,6 +124,7 @@ class FmAwareYSyncValue {
   }
 
   destroy() {
+    this._ytext.doc?.off("beforeTransaction", this._beforeTxn);
     this._ytext.unobserve(this._observer);
   }
 }
