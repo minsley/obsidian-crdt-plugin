@@ -109,20 +109,12 @@ Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Show
 
 ### Known issues / session notes (2026-02-25)
 
-**Frontmatter / yCollab interaction (partially fixed, needs monitoring)**
+**Frontmatter / yCollab interaction — RESOLVED**
 
-In Obsidian Live Preview, the CM6 editor document includes the YAML
-frontmatter block as raw text. yCollab binds to the full editor, so
-when the editor includes FM, yCollab syncs it into ytext. We strip FM
-from ytext before every file write and read FM fresh from disk instead.
-A no-op guard skips writes when content hasn't changed, breaking the
-duplication loop.
-
-Remaining risk: ytext may accumulate FM internally (Yjs state on disk
-will include it). This is invisible to users but could cause issues
-when peers with different UUIDs exchange Yjs state — their FMs would
-CRDT-merge in unpredictable ways. Proper fix: scope yCollab to the
-body range of the editor only, not the full document. Deferred.
+FM-aware sync plugins (`fmAwareYSync`, `fmAwareRemoteSelections`,
+`fmEndField`) offset all positions by FM length, so ytext never
+contains frontmatter. Bootstrap strips any legacy FM remnants from
+ytext before diff-apply.
 
 ### Deferred (document for next sprint)
 

@@ -35,6 +35,24 @@ export function frontmatterEndIndex(doc: { toString(): string; length?: number; 
   return 0;
 }
 
+/** Strip YAML frontmatter block(s) so ytext only holds document body. */
+export function stripFrontmatter(content: string): string {
+  let result = content;
+  let safety = 10;
+  while (safety-- > 0) {
+    const end = frontmatterEndIndex(result);
+    if (end === 0) break;
+    result = result.slice(end);
+  }
+  return result;
+}
+
+/** Extract the YAML frontmatter block (including trailing newline), or "". */
+export function extractFrontmatter(content: string): string {
+  const end = frontmatterEndIndex(content);
+  return end === 0 ? "" : content.slice(0, end);
+}
+
 /**
  * CM6 StateField that tracks the character offset where frontmatter ends.
  * Value is 0 when there's no frontmatter.

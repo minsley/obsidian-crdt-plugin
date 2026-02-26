@@ -7,7 +7,8 @@ import {
 } from "obsidian";
 import { WebrtcProvider } from "y-webrtc";
 import * as Y from "yjs";
-import { WebRTCSession, stripFrontmatter } from "./webrtc-session";
+import { WebRTCSession } from "./webrtc-session";
+import { stripFrontmatter } from "./fm-offset";
 import { createCollabExtension } from "./cm-extension";
 import { log, warn, debug, setDebug } from "./log";
 import {

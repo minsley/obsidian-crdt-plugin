@@ -96,7 +96,7 @@ class YRemoteCaretWidget extends WidgetType {
   }
 
   eq(widget: YRemoteCaretWidget) {
-    return widget.color === this.color;
+    return widget.color === this.color && widget.name === this.name;
   }
 }
 

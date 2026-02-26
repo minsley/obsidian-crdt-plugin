@@ -8,6 +8,4 @@ export interface FileCollabInfo {
   peerCount: number;
   roomCode?: string;
   session?: WebRTCSession;
-  // Unlink undo cache — cleared on plugin unload
-  unlinkCache?: { yjsData: Uint8Array };
 }
