@@ -73,17 +73,17 @@ type EventMap = {
  *   1. Load Yjs state from UUID-keyed plugin folder
  *   2. If Yjs is empty → seed from .md content
  *   3. If Yjs matches .md → normal resumption
- *   4. If Yjs ≠ .md → warn and use Yjs (diff-apply deferred)
+ *   4. If Yjs ≠ .md → diff-apply offline edits as Yjs operations
  */
 export class WebRTCSession {
   ydoc: Y.Doc;
   ytext: Y.Text;
-  provider: WebrtcProvider;
+  provider!: WebrtcProvider;
   private _selfWriteUntil = 0;
   private _destroyed = false;
   readonly whenReady: Promise<void>;
-  private _awarenessHandler: () => void;
-  private _ytextObserver: () => void;
+  private _awarenessHandler!: () => void;
+  private _ytextObserver!: () => void;
 
   private listeners = new Map<string, Function[]>();
 
@@ -97,7 +97,7 @@ export class WebRTCSession {
     private app: App,
     private file: TFile,
     readonly uuid: string,
-    roomCode: string,
+    private roomCode: string,
     private settings: CRDTCoEditorSettings
   ) {
     log(`WebRTCSession created: ${file.path} uuid=${uuid} room=${roomCode}`);
@@ -106,7 +106,15 @@ export class WebRTCSession {
     this.ydoc.gc = true;
     this.ytext = this.ydoc.getText("content");
 
-    this.provider = new WebrtcProvider(roomCode, this.ydoc, {
+    // Bootstrap loads local Yjs state and reconciles with disk BEFORE
+    // starting WebRTC, so remote ops can't pollute the diff-apply comparison.
+    this.whenReady = this.bootstrap().then(() => this.startProvider());
+  }
+
+  private startProvider() {
+    if (this._destroyed) return;
+
+    this.provider = new WebrtcProvider(this.roomCode, this.ydoc, {
       signaling: [this.settings.signalingUrl],
     });
 
@@ -115,14 +123,13 @@ export class WebRTCSession {
       color: this.settings.userColor,
     });
 
-    // Advertise document identity so joiners can discover the UUID
     this.provider.awareness.setLocalStateField("docMeta", {
-      uuid,
-      filename: file.name,
+      uuid: this.uuid,
+      filename: this.file.name,
     });
 
     this._awarenessHandler = () => {
-      const count = this.provider.awareness.getStates().size - 1; // exclude self
+      const count = this.provider.awareness.getStates().size - 1;
       this.emit("peers", Math.max(0, count));
     };
     this.provider.awareness.on("change", this._awarenessHandler);
@@ -133,8 +140,6 @@ export class WebRTCSession {
       }
     };
     this.ytext.observe(this._ytextObserver);
-
-    this.whenReady = this.bootstrap();
   }
 
   on<K extends keyof EventMap>(
@@ -220,11 +225,15 @@ export class WebRTCSession {
     debug(`[${this.file.path}] WebRTCSession destroyed`);
     this._destroyed = true;
     this.debouncedWriteMarkdown.cancel?.();
-    this.ytext.unobserve(this._ytextObserver);
-    this.provider.awareness.off("change", this._awarenessHandler);
-    this.provider.awareness.setLocalState(null);
-    this.provider.disconnect();
-    this.provider.destroy();
+    if (this._ytextObserver) {
+      this.ytext.unobserve(this._ytextObserver);
+    }
+    if (this.provider) {
+      this.provider.awareness.off("change", this._awarenessHandler);
+      this.provider.awareness.setLocalState(null);
+      this.provider.disconnect();
+      this.provider.destroy();
+    }
     this.ydoc.destroy();
   }
 }
