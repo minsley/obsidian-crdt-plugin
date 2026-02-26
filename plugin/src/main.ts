@@ -55,11 +55,14 @@ function stateIcon(state: CollabState): string {
   }
 }
 
-function stateTooltip(state: CollabState, peerCount = 0): string {
+function stateTooltip(state: CollabState, peerCount = 0, userName?: string): string {
   switch (state) {
     case "offline":      return "Go Online";
     case "connecting":   return "Connecting...";
-    case "live":         return `Live — ${peerCount} peer${peerCount !== 1 ? "s" : ""} (click to go offline)`;
+    case "live": {
+      const youLabel = userName ? ` (you: ${userName})` : "";
+      return `Live — ${peerCount} peer${peerCount !== 1 ? "s" : ""}${youLabel} (click to go offline)`;
+    }
     case "disconnecting": return "Disconnecting...";
   }
 }
@@ -76,6 +79,8 @@ export default class CRDTCoEditorPlugin extends Plugin {
   // In-session unlink undo cache. Key = file.path
   private unlinkCaches = new Map<string, { uuid: string; yjsData: Uint8Array }>();
 
+  private statusBarEl!: HTMLElement;
+
   async onload() {
     await this.loadSettings();
     setDebug(this.settings.debugLogging);
@@ -87,6 +92,9 @@ export default class CRDTCoEditorPlugin extends Plugin {
     this.addRibbonIcon("users", "Join collaboration session", () => {
       new JoinModal(this.app, this).open();
     });
+
+    this.statusBarEl = this.addStatusBarItem();
+    this.statusBarEl.addClass("collab-status-bar");
 
     this.addCommand({
       id: "join-session",
@@ -411,6 +419,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
       if (i) {
         i.peerCount = count;
         this.updateHeaderButtonsForFile(file);
+        this.updateStatusBar();
       }
     });
 
@@ -492,6 +501,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
         if (i) {
           i.peerCount = count;
           this.updateHeaderButtonsForFile(file!);
+          this.updateStatusBar();
         }
       });
 
@@ -578,6 +588,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
       this.updateHeaderButton(view);
     });
+    this.updateStatusBar();
   }
 
   private updateHeaderButton(view: MarkdownView) {
@@ -603,7 +614,7 @@ export default class CRDTCoEditorPlugin extends Plugin {
       const info = this.collabFiles.get(file.path);
       const state: CollabState = info?.state ?? "offline";
       setIcon(btn, stateIcon(state));
-      btn.ariaLabel = stateTooltip(state, info?.peerCount ?? 0);
+      btn.ariaLabel = stateTooltip(state, info?.peerCount ?? 0, this.settings.userName);
       btn.addClass(`collab-state-${state}`);
     }
   }
@@ -645,6 +656,30 @@ export default class CRDTCoEditorPlugin extends Plugin {
     if (file instanceof TFile) {
       this.updateHeaderButtonsForFile(file);
     }
+    this.updateStatusBar();
+  }
+
+  private updateStatusBar() {
+    this.statusBarEl.empty();
+
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile) return;
+
+    const info = this.collabFiles.get(activeFile.path);
+    if (!info || info.state !== "live") return;
+
+    const dot = this.statusBarEl.createSpan({ cls: "collab-status-dot" });
+    dot.style.backgroundColor = this.settings.userColor || "#888";
+
+    this.statusBarEl.createSpan({
+      cls: "collab-status-name",
+      text: this.settings.userName || "Anonymous",
+    });
+
+    this.statusBarEl.createSpan({
+      cls: "collab-status-peers",
+      text: ` · ${info.peerCount} peer${info.peerCount !== 1 ? "s" : ""}`,
+    });
   }
 
   private ensureSettingsIdentity() {
