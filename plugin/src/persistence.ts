@@ -48,7 +48,10 @@ export async function saveYjsState(
     // already exists
   }
   const state = Y.encodeStateAsUpdate(doc);
-  await app.vault.adapter.writeBinary(path, state.buffer as ArrayBuffer);
+  await app.vault.adapter.writeBinary(
+    path,
+    state.buffer.slice(state.byteOffset, state.byteOffset + state.byteLength) as ArrayBuffer
+  );
 }
 
 export async function readYjsStateRaw(

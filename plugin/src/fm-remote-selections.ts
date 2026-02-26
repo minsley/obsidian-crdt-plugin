@@ -204,9 +204,11 @@ class FmAwareRemoteSelectionsValue {
       )
         return;
 
-      const { color = "#30bced", name = "Anonymous" } = state.user || {};
-      const colorLight =
-        (state.user && state.user.colorLight) || color + "33";
+      const rawColor = state.user?.color ?? "#30bced";
+      const name = state.user?.name ?? "Anonymous";
+      const color = /^#[0-9a-fA-F]{6,8}$/.test(rawColor) ? rawColor : "#30bced";
+      const rawLight = state.user?.colorLight;
+      const colorLight = (rawLight && /^#[0-9a-fA-F]{6,8}$/.test(rawLight)) ? rawLight : color + "33";
 
       // Offset ytext positions into editor positions
       const anchorPos = Math.min(anchor.index + fmEnd, docLen);

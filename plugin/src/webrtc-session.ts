@@ -79,7 +79,7 @@ export class WebRTCSession {
   ydoc: Y.Doc;
   ytext: Y.Text;
   provider!: WebrtcProvider;
-  private _selfWriteUntil = 0;
+  private _lastWrittenContent: string | null = null;
   private _destroyed = false;
   private _isFirstTimeJoiner = false;
   readonly whenReady: Promise<void>;
@@ -170,11 +170,20 @@ export class WebRTCSession {
     const loaded = await loadYjsState(this.app, this.uuid, this.ydoc);
 
     if (loaded && this.ytext.length > 0) {
-      // ytext may contain FM if yCollab previously synced it from the editor; strip before comparing
-      if (stripFrontmatter(this.ytext.toString()) === body) {
+      // ytext may contain FM remnants from pre-migration yCollab; strip before comparing
+      const ytextRaw = this.ytext.toString();
+      const ytextBody = stripFrontmatter(ytextRaw);
+
+      // If ytext has FM remnants, remove them so diff positions align
+      if (ytextRaw !== ytextBody) {
+        const fmLen = ytextRaw.length - ytextBody.length;
+        debug(`bootstrap: stripping ${fmLen} chars of FM from ytext`);
+        this.ydoc.transact(() => { this.ytext.delete(0, fmLen); });
+      }
+
+      if (ytextBody === body) {
         debug(`bootstrap: Yjs matches disk, resuming`);
       } else {
-        const ytextBody = stripFrontmatter(this.ytext.toString());
         debug(
           `bootstrap: Yjs differs from disk for ${this.file.path} — applying diff (${ytextBody.length} → ${body.length} chars)`
         );
@@ -214,7 +223,7 @@ export class WebRTCSession {
       return;
     }
 
-    this._selfWriteUntil = Date.now() + 500;
+    this._lastWrittenContent = content;
     await this.app.vault.modify(this.file, content);
     await saveYjsState(this.app, this.uuid, this.ydoc);
   }
@@ -246,8 +255,8 @@ export class WebRTCSession {
     });
   }
 
-  get isSelfWrite(): boolean {
-    return Date.now() < this._selfWriteUntil;
+  isSelfWrite(content: string): boolean {
+    return this._lastWrittenContent === content;
   }
 
   destroy(): void {

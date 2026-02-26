@@ -235,8 +235,10 @@ export default class CRDTCoEditorPlugin extends Plugin {
       this.app.vault.on("modify", async (file) => {
         if (file instanceof TFile) {
           const info = this.collabFiles.get(file.path);
-          if (info?.session && !info.session.isSelfWrite) {
-            const diskContent = stripFrontmatter(await this.app.vault.read(file));
+          if (info?.session) {
+            const currentContent = await this.app.vault.read(file);
+            if (info.session.isSelfWrite(currentContent)) return;
+            const diskContent = stripFrontmatter(currentContent);
             const ytextContent = stripFrontmatter(info.session.ytext.toString());
             if (diskContent !== ytextContent) {
               warn(

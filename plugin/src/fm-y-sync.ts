@@ -1,5 +1,5 @@
 import { ViewPlugin, EditorView, ViewUpdate } from "@codemirror/view";
-import { EditorSelection } from "@codemirror/state";
+import { EditorSelection, type TransactionSpec } from "@codemirror/state";
 import { ySyncFacet } from "y-codemirror.next";
 import { ySyncAnnotation } from "y-codemirror.next/src/y-sync.js";
 import * as Y from "yjs";
@@ -54,27 +54,29 @@ class FmAwareYSyncValue {
         }
       }
       if (changes.length > 0) {
-        this.view.dispatch({
+        const spec: TransactionSpec = {
           changes,
           annotations: [ySyncAnnotation.of(this.conf)],
-        });
+        };
 
+        // Restore cursor position in the same dispatch to avoid double undo steps
         if (this._savedRelPos) {
-          const newFmEnd = this.view.state.field(fmEndField);
-          const doc = this._ytext.doc!;
-          const anchorAbs = Y.createAbsolutePositionFromRelativePosition(this._savedRelPos.anchor, doc);
-          const headAbs = Y.createAbsolutePositionFromRelativePosition(this._savedRelPos.head, doc);
+          const ydoc = this._ytext.doc!;
+          // Compute new fmEnd after the changes are applied
+          const tmpState = this.view.state.update({ changes }).state;
+          const newFmEnd = tmpState.field(fmEndField);
+          const anchorAbs = Y.createAbsolutePositionFromRelativePosition(this._savedRelPos.anchor, ydoc);
+          const headAbs = Y.createAbsolutePositionFromRelativePosition(this._savedRelPos.head, ydoc);
           if (anchorAbs && headAbs) {
-            const docLen = this.view.state.doc.length;
+            const docLen = tmpState.doc.length;
             const anchor = Math.min(anchorAbs.index + newFmEnd, docLen);
             const head = Math.min(headAbs.index + newFmEnd, docLen);
-            this.view.dispatch({
-              selection: EditorSelection.single(anchor, head),
-              annotations: [ySyncAnnotation.of(this.conf)],
-            });
+            spec.selection = EditorSelection.single(anchor, head);
           }
           this._savedRelPos = null;
         }
+
+        this.view.dispatch(spec);
       }
     }
   };

@@ -8,8 +8,12 @@ import { StateField, EditorState } from "@codemirror/state";
  * whole document string.  Since frontmatter is always at the top of the file
  * we only need to read the first few lines.
  */
-export function frontmatterEndIndex(doc: { toString(): string }): number {
-  const text = doc.toString();
+export function frontmatterEndIndex(doc: { toString(): string; length?: number; sliceString?: (from: number, to?: number) => string }): number {
+  // Only materialize the first ~2KB since FM is always at the top
+  const maxSlice = 2000;
+  const text = (doc.sliceString && typeof doc.length === "number")
+    ? doc.sliceString(0, Math.min(doc.length, maxSlice))
+    : doc.toString();
   if (!text.startsWith("---")) return 0;
 
   const firstNl = text.indexOf("\n");
@@ -41,6 +45,8 @@ export const fmEndField = StateField.define<number>({
   },
   update(value, tr) {
     if (!tr.docChanged) return value;
+    // Skip recomputation when changes are entirely below the FM boundary
+    if (value > 0 && !tr.changes.touchesRange(0, value)) return value;
     return frontmatterEndIndex(tr.newDoc);
   },
 });

@@ -98,7 +98,8 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
             if (this.currentPath === filePath && this.currentSession === session && !this.hasActiveCollab()) {
               this.attachSession(session, filePath);
             }
-          });
+          })
+          .catch((err) => debug(`[cm] waitAndAttach failed for ${filePath}: ${err}`));
       }
 
       private resolveFilePath(): string | null {
