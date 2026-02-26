@@ -88,7 +88,7 @@ Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Show
 - [x] **docMeta in awareness** — host sets `{ uuid, filename }` in awareness so joiners discover UUID via WebRTC awareness API.
 - [x] **Join flow: UUID lookup** — `discoverUuid(roomCode)` waits for awareness docMeta; `findFileByCollabId` searches vault; creates new file if not found.
 - [x] **Session state machine** — `CollabState` type + `FileCollabInfo` in `collab-state.ts`; `collabFiles: Map<string, FileCollabInfo>` replaces `collabActive` + `sessions`.
-- [ ] **Bootstrap: diff-apply for offline edits** — if `.yjs` content ≠ `.md`, apply diff as Yjs text operations. Deferred: requires `fast-diff` and Yjs transaction work.
+- [x] **Bootstrap: diff-apply for offline edits** — if `.yjs` content ≠ `.md`, apply diff as Yjs text operations via `fast-diff`.
 
 ### N1: UI
 
@@ -96,8 +96,8 @@ Removes `collab-id` from frontmatter, deletes Yjs state from plugin folder. Show
 - [x] **Online modal** — `online-modal.ts`: two-panel Host/Join, transitions in-place on host click.
 - [x] **File explorer context menu** — `file-menu` event: "Make Collaborative" / "Go Online" / "Go Offline" / "Copy Room Code" / "Unlink".
 - [x] **Commands** — `make-collaborative`, `go-online`, `go-offline`, `copy-room-code`, `unlink-collaboration` via `editorCallback`.
-- [ ] **Unlink warning modal** — with "don't show again" checkbox, in-session Restore option. Deferred.
-- [ ] **Unlink undo cache** — hold UUID + Yjs in memory until editor closes; offer Restore. Deferred.
+- [x] **Unlink warning modal** — with "don't show again" checkbox. `unlink-modal.ts`.
+- [x] **Unlink undo cache** — caches Yjs binary in memory; "Undo" link in notice + "Restore Collaboration" context menu.
 
 ### N2: Identity
 
@@ -126,11 +126,11 @@ body range of the editor only, not the full document. Deferred.
 
 ### Deferred (document for next sprint)
 
-- **Scope yCollab to editor body only** — yCollab currently binds to the full CM6 editor doc which includes YAML frontmatter in Obsidian Live Preview. Need to offset yCollab's range by the FM length, or use a CM6 facet to exclude the FM region from the binding. This is the clean fix for the FM/ytext contamination.
-- **Diff-apply for offline edits** — requires `fast-diff` dep + Yjs transact. Most complex bootstrap case.
-- **Unlink warning modal** — "don't show again" with `unlinkWarningDismissed` settings field (field added, modal not yet built).
-- **Unlink undo cache / Restore** — hold `unlinkCache: { yjsData }` in `FileCollabInfo` until plugin unload.
-- **Returning joiner UUID match** — when going online on a file that already has a matching UUID, skip the awareness discovery step and go straight to session creation.
+- ~~**Scope yCollab to editor body only**~~ — Done: FM-aware sync plugins (`fmAwareYSync`, `fmAwareRemoteSelections`, `fmEndField`) offset all positions by FM length.
+- ~~**Diff-apply for offline edits**~~ — Done: `applyDiffToYText` in `diff-apply.ts` via `fast-diff`.
+- ~~**Unlink warning modal**~~ — Done: `unlink-modal.ts` with "don't show again" checkbox.
+- ~~**Unlink undo cache / Restore**~~ — Done: `unlinkCaches` map in main.ts; notice Undo link + context menu Restore.
+- ~~**Returning joiner UUID match**~~ — Done: `joinSession(roomCode, knownFile?)` skips `discoverUuid` when file has UUID.
 
 ---
 
