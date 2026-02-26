@@ -140,6 +140,7 @@ body range of the editor only, not the full document. Deferred.
 - **3a. Modal layouts** — Host/Join panels feel cramped; needs proper spacing, hierarchy, and mobile-friendly layout.
 - **3b. State iconography** — offline/connecting/live/disconnecting icons need a coherent visual language. Current: users/radio-tower/wifi/loader. Revisit with a designer eye.
 - **3c. Local user cursor color** — collaborators see each other's colored cursors, but the local user has no visual indicator of their own color/name as others see it. Add a local cursor decoration or status bar badge showing "you are Amber Otter (●)".
+- **3d. Stable local cursor on remote edits** — when a remote peer types above your cursor, your cursor gets pushed/pulled. Use Yjs relative positions to map the local selection through remote changes, preserving the user's logical position in the document.
 
 ### 4 — Block-based CRDT
 Move from single Y.Text to Y.Array of blocks for better conflict reconciliation on paragraph-level edits. See F5 in Feature Roadmap.
