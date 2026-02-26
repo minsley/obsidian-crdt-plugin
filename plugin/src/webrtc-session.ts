@@ -2,6 +2,7 @@ import { App, TFile, debounce } from "obsidian";
 import * as Y from "yjs";
 import { WebrtcProvider } from "y-webrtc";
 import { loadYjsState, saveYjsState } from "./persistence";
+import { applyDiffToYText } from "./diff-apply";
 import { log, debug, warn } from "./log";
 import type { CRDTCoEditorSettings } from "./settings";
 import type { CollabState } from "./collab-state";
@@ -162,9 +163,11 @@ export class WebRTCSession {
       if (stripFrontmatter(this.ytext.toString()) === body) {
         debug(`bootstrap: Yjs matches disk, resuming`);
       } else {
-        warn(
-          `bootstrap: Yjs differs from disk for ${this.file.path} — using Yjs state (diff-apply deferred)`
+        const ytextBody = stripFrontmatter(this.ytext.toString());
+        debug(
+          `bootstrap: Yjs differs from disk for ${this.file.path} — applying diff (${ytextBody.length} → ${body.length} chars)`
         );
+        applyDiffToYText(this.ytext, ytextBody, body);
       }
       return;
     }
