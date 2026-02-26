@@ -92,11 +92,13 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
 
       private waitAndAttach(session: WebRTCSession, filePath: string) {
         debug(`[cm] waitAndAttach(${filePath})`);
-        session.whenReady.then(() => {
-          if (this.currentPath === filePath && this.currentSession === session && !this.hasActiveCollab()) {
-            this.attachSession(session, filePath);
-          }
-        });
+        session.whenReady
+          .then(() => session.waitForContent())
+          .then(() => {
+            if (this.currentPath === filePath && this.currentSession === session && !this.hasActiveCollab()) {
+              this.attachSession(session, filePath);
+            }
+          });
       }
 
       private resolveFilePath(): string | null {

@@ -81,6 +81,7 @@ export class WebRTCSession {
   provider!: WebrtcProvider;
   private _selfWriteUntil = 0;
   private _destroyed = false;
+  private _isFirstTimeJoiner = false;
   readonly whenReady: Promise<void>;
   private _awarenessHandler!: () => void;
   private _ytextObserver!: () => void;
@@ -184,6 +185,7 @@ export class WebRTCSession {
       });
     } else {
       debug(`bootstrap: empty doc, waiting for peers`);
+      this._isFirstTimeJoiner = true;
     }
   }
 
@@ -215,6 +217,28 @@ export class WebRTCSession {
   async flushAndSave(): Promise<void> {
     this.debouncedWriteMarkdown.cancel?.();
     await this.writeMarkdownFile();
+  }
+
+  waitForContent(): Promise<void> {
+    if (!this._isFirstTimeJoiner || this.ytext.length > 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.ytext.unobserve(obs);
+        debug(`waitForContent: timeout (5s), proceeding with empty doc`);
+        resolve();
+      }, 5000);
+      const obs = () => {
+        if (this.ytext.length > 0) {
+          clearTimeout(timeout);
+          this.ytext.unobserve(obs);
+          debug(`waitForContent: content arrived (${this.ytext.length} chars)`);
+          resolve();
+        }
+      };
+      this.ytext.observe(obs);
+    });
   }
 
   get isSelfWrite(): boolean {
