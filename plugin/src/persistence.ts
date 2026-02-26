@@ -44,6 +44,18 @@ export async function saveYjsState(
   await app.vault.adapter.writeBinary(path, state.buffer as ArrayBuffer);
 }
 
+export async function readYjsStateRaw(
+  app: App,
+  uuid: string
+): Promise<Uint8Array | null> {
+  try {
+    const data = await app.vault.adapter.readBinary(yjsPath(app, uuid));
+    return new Uint8Array(data);
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteYjsState(app: App, uuid: string): Promise<void> {
   try {
     await app.vault.adapter.remove(yjsPath(app, uuid));

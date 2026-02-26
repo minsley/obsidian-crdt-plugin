@@ -21,7 +21,7 @@ import {
   removeCollabId,
   findFileByCollabId,
 } from "./frontmatter";
-import { deleteYjsState } from "./persistence";
+import { deleteYjsState, readYjsStateRaw, saveYjsState } from "./persistence";
 import { generateName, colorForPeerIndex } from "./identity";
 import type { CollabState, FileCollabInfo } from "./collab-state";
 import { OnlineModal, JoinModal } from "./online-modal";
@@ -72,6 +72,9 @@ export default class CRDTCoEditorPlugin extends Plugin {
 
   // One header button per MarkdownView
   private headerButtons = new WeakMap<MarkdownView, HTMLElement>();
+
+  // In-session unlink undo cache. Key = file.path
+  private unlinkCaches = new Map<string, { uuid: string; yjsData: Uint8Array }>();
 
   async onload() {
     await this.loadSettings();
@@ -152,6 +155,14 @@ export default class CRDTCoEditorPlugin extends Plugin {
         const file = abstractFile;
         const uuid = getCollabId(this.app, file);
         if (!uuid) {
+          if (this.unlinkCaches.has(file.path)) {
+            menu.addItem((item) =>
+              item
+                .setTitle("Restore Collaboration")
+                .setIcon("undo")
+                .onClick(() => this.restoreUnlink(file))
+            );
+          }
           menu.addItem((item) =>
             item
               .setTitle("Make Collaborative")
@@ -319,13 +330,55 @@ export default class CRDTCoEditorPlugin extends Plugin {
       await this.goOffline(file);
     }
 
+    // Cache Yjs state for in-session restore
+    const yjsData = await readYjsStateRaw(this.app, uuid);
+    if (yjsData) {
+      this.unlinkCaches.set(file.path, { uuid, yjsData });
+    }
+
     await removeCollabId(this.app, file);
     await deleteYjsState(this.app, uuid);
     this.collabFiles.delete(file.path);
 
     this.syncHeaderButtons();
-    new Notice("Collaboration unlinked");
     log(`unlinkFile: ${file.path} uuid=${uuid}`);
+
+    // Offer restore via a 10-second notice
+    const frag = document.createDocumentFragment();
+    frag.appendText("Collaboration unlinked. ");
+    const restoreLink = frag.createEl("a", { text: "Undo", href: "#" });
+    restoreLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      this.restoreUnlink(file);
+    });
+    new Notice(frag, 10000);
+  }
+
+  async restoreUnlink(file: TFile): Promise<void> {
+    const cache = this.unlinkCaches.get(file.path);
+    if (!cache) {
+      new Notice("No unlink data to restore");
+      return;
+    }
+
+    await setCollabId(this.app, file, cache.uuid);
+
+    // Re-save the Yjs state by loading into a temp doc and saving
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, cache.yjsData);
+    await saveYjsState(this.app, cache.uuid, doc);
+    doc.destroy();
+
+    this.collabFiles.set(file.path, {
+      uuid: cache.uuid,
+      state: "offline",
+      peerCount: 0,
+    });
+
+    this.unlinkCaches.delete(file.path);
+    this.syncHeaderButtons();
+    new Notice("Collaboration restored");
+    log(`restoreUnlink: ${file.path} uuid=${cache.uuid}`);
   }
 
   copyRoomCode(file: TFile): void {
