@@ -182,7 +182,7 @@ export class OnlineModal extends Modal {
 
     try {
       statusEl.setText("Waiting for room info...");
-      await this.plugin.joinSession(roomCode);
+      await this.plugin.joinSession(roomCode, this.file);
       this.close();
     } catch (e: any) {
       contentEl.empty();

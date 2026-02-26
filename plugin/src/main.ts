@@ -426,21 +426,28 @@ export default class CRDTCoEditorPlugin extends Plugin {
   }
 
   // Called by OnlineModal — join path
-  async joinSession(roomCode: string): Promise<void> {
+  // When knownFile is provided (returning joiner), skip awareness discovery.
+  async joinSession(roomCode: string, knownFile?: TFile): Promise<void> {
     this.ensureSettingsIdentity();
 
-    const { uuid, filename } = await this.discoverUuid(roomCode);
-    log(`joinSession: discovered uuid=${uuid} filename=${filename} room=${roomCode}`);
-
-    let file: TFile | null = null;
+    let file: TFile | null = knownFile ?? null;
     let fileCreated = false;
-    let session: WebRTCSession | undefined;
+    let uuid: string | undefined;
 
-    try {
-      // Find or create the file with this UUID
+    if (file) {
+      uuid = getCollabId(this.app, file) ?? undefined;
+    }
+
+    if (uuid) {
+      log(`joinSession: returning joiner uuid=${uuid} room=${roomCode}`);
+    } else {
+      const discovered = await this.discoverUuid(roomCode);
+      uuid = discovered.uuid;
+      log(`joinSession: discovered uuid=${uuid} filename=${discovered.filename} room=${roomCode}`);
+
       file = findFileByCollabId(this.app, uuid);
       if (!file) {
-        const baseName = filename.replace(/\.md$/, "");
+        const baseName = discovered.filename.replace(/\.md$/, "");
         let filePath = `${baseName}.md`;
         let n = 2;
         while (this.app.vault.getAbstractFileByPath(filePath)) {
@@ -453,7 +460,15 @@ export default class CRDTCoEditorPlugin extends Plugin {
       } else {
         debug(`joinSession: found existing file ${file.path}`);
       }
+    }
 
+    if (!file || !uuid) {
+      throw new Error("Could not determine file or UUID for join");
+    }
+
+    let session: WebRTCSession | undefined;
+
+    try {
       // Open file in editor
       const leaf = this.app.workspace.getLeaf(false);
       await leaf.openFile(file);
