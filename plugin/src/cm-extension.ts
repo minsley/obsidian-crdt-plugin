@@ -29,6 +29,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
   const watcherPlugin = ViewPlugin.fromClass(
     class {
       private currentPath: string | null = null;
+      private currentSession: WebRTCSession | null = null;
       private checkPending = false;
 
       constructor(private view: EditorView) {
@@ -48,14 +49,28 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
 
       private syncSession() {
         const filePath = this.resolveFilePath();
+        const session = filePath
+          ? plugin.collabFiles.get(filePath)?.session ?? null
+          : null;
+
+        // Detect session change (offline→host creates new session on same path)
+        if (session !== this.currentSession) {
+          if (this.currentSession) {
+            debug(`[cm] session changed for ${filePath}, detaching old`);
+            this.detach();
+          }
+          this.currentSession = session;
+          if (session && filePath) {
+            this.currentPath = filePath;
+            this.waitAndAttach(session, filePath);
+            return;
+          }
+        }
 
         if (filePath === this.currentPath) {
-          if (filePath && !this.hasActiveCollab()) {
-            const session = plugin.collabFiles.get(filePath)?.session;
-            if (session) {
-              debug(`[cm] found new session for ${filePath}`);
-              this.waitAndAttach(session, filePath);
-            }
+          if (filePath && !this.hasActiveCollab() && session) {
+            debug(`[cm] found new session for ${filePath}`);
+            this.waitAndAttach(session, filePath);
           }
           return;
         }
@@ -68,7 +83,6 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
           return;
         }
 
-        const session = plugin.collabFiles.get(filePath)?.session;
         if (session) {
           this.waitAndAttach(session, filePath);
         } else {
@@ -79,7 +93,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
       private waitAndAttach(session: WebRTCSession, filePath: string) {
         debug(`[cm] waitAndAttach(${filePath})`);
         session.whenReady.then(() => {
-          if (this.currentPath === filePath && !this.hasActiveCollab()) {
+          if (this.currentPath === filePath && this.currentSession === session) {
             this.attachSession(session, filePath);
           }
         });
@@ -154,6 +168,7 @@ export function createCollabExtension(plugin: CRDTCoEditorPlugin) {
       }
 
       private detach() {
+        this.currentSession = null;
         if (this.hasActiveCollab()) {
           debug("[cm] detaching yCollab");
           this.view.dispatch({

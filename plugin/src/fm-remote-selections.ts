@@ -225,18 +225,23 @@ class FmAwareRemoteSelectionsValue {
             }).range(start, end)
           );
         } else {
-          decorations.push(
-            Decoration.mark({
-              attributes: { style: `background-color: ${colorLight}` },
-              class: "cm-ySelection",
-            }).range(start, startLine.from + startLine.length)
-          );
-          decorations.push(
-            Decoration.mark({
-              attributes: { style: `background-color: ${colorLight}` },
-              class: "cm-ySelection",
-            }).range(endLine.from, end)
-          );
+          const startEnd = startLine.from + startLine.length;
+          if (start < startEnd) {
+            decorations.push(
+              Decoration.mark({
+                attributes: { style: `background-color: ${colorLight}` },
+                class: "cm-ySelection",
+              }).range(start, startEnd)
+            );
+          }
+          if (endLine.from < end) {
+            decorations.push(
+              Decoration.mark({
+                attributes: { style: `background-color: ${colorLight}` },
+                class: "cm-ySelection",
+              }).range(endLine.from, end)
+            );
+          }
           for (let i = startLine.number + 1; i < endLine.number; i++) {
             const linePos = update.view.state.doc.line(i).from;
             decorations.push(
