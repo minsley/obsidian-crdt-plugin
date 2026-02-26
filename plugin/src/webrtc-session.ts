@@ -109,7 +109,12 @@ export class WebRTCSession {
 
     // Bootstrap loads local Yjs state and reconciles with disk BEFORE
     // starting WebRTC, so remote ops can't pollute the diff-apply comparison.
-    this.whenReady = this.bootstrap().then(() => this.startProvider());
+    this.whenReady = this.bootstrap()
+      .then(() => this.startProvider())
+      .catch((err) => {
+        warn(`Session bootstrap failed for ${file.path}: ${err}`);
+        this.destroy();
+      });
   }
 
   private startProvider() {

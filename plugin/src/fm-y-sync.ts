@@ -32,6 +32,7 @@ class FmAwareYSyncValue {
   };
 
   private _observer = (event: any, tr: any) => {
+    if (!this._ytext.doc) return;
     if (tr.origin !== this.conf) {
       const fmEnd = this.view.state.field(fmEndField);
       const delta = event.delta;
@@ -93,9 +94,10 @@ class FmAwareYSyncValue {
     }
 
     const ytext = this.conf.ytext;
+    if (!ytext.doc) return;
     const fmEnd = update.startState.field(fmEndField);
 
-    ytext.doc!.transact(() => {
+    ytext.doc.transact(() => {
       let adj = 0;
       update.changes.iterChanges(
         (fromA: number, toA: number, _fromB: number, _toB: number, insert: any) => {

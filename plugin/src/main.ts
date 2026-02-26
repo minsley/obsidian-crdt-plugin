@@ -213,6 +213,23 @@ export default class CRDTCoEditorPlugin extends Plugin {
       })
     );
 
+    // Migrate map entries when a file is renamed/moved
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!(file instanceof TFile)) return;
+        const info = this.collabFiles.get(oldPath);
+        if (info) {
+          this.collabFiles.delete(oldPath);
+          this.collabFiles.set(file.path, info);
+        }
+        const cache = this.unlinkCaches.get(oldPath);
+        if (cache) {
+          this.unlinkCaches.delete(oldPath);
+          this.unlinkCaches.set(file.path, cache);
+        }
+      })
+    );
+
     // Handle external file modifications while live
     this.registerEvent(
       this.app.vault.on("modify", async (file) => {
@@ -426,10 +443,18 @@ export default class CRDTCoEditorPlugin extends Plugin {
     const info = this.collabFiles.get(file.path)!;
     info.session = session;
     info.roomCode = roomCode;
-    info.state = "live";
+    info.state = "connecting";
     info.peerCount = 0;
 
     this.syncHeaderButtons();
+
+    session.whenReady.then(() => {
+      if (info.state === "connecting") {
+        info.state = "live";
+        this.syncHeaderButtons();
+      }
+    });
+
     log(`beginHosting: ${file.path} room=${roomCode}`);
     return roomCode;
   }
@@ -452,11 +477,21 @@ export default class CRDTCoEditorPlugin extends Plugin {
     } else {
       const discovered = await this.discoverUuid(roomCode);
       uuid = discovered.uuid;
-      log(`joinSession: discovered uuid=${uuid} filename=${discovered.filename} room=${roomCode}`);
+
+      // Validate UUID format to prevent path traversal
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+        throw new Error("Invalid UUID received from peer");
+      }
+
+      // Sanitize filename to prevent path traversal
+      const safeName = discovered.filename
+        .replace(/[\/\\]/g, "_")
+        .replace(/\.\./g, "_");
+      log(`joinSession: discovered uuid=${uuid} filename=${safeName} room=${roomCode}`);
 
       file = findFileByCollabId(this.app, uuid);
       if (!file) {
-        const baseName = discovered.filename.replace(/\.md$/, "");
+        const baseName = safeName.replace(/\.md$/, "");
         let filePath = `${baseName}.md`;
         let n = 2;
         while (this.app.vault.getAbstractFileByPath(filePath)) {
@@ -508,11 +543,19 @@ export default class CRDTCoEditorPlugin extends Plugin {
       const info = this.collabFiles.get(file.path)!;
       info.session = session;
       info.roomCode = roomCode;
-      info.state = "live";
+      info.state = "connecting";
       info.peerCount = 0;
 
       this.syncHeaderButtons();
-      new Notice(`Joined room: ${roomCode}`);
+
+      session.whenReady.then(() => {
+        if (info.state === "connecting") {
+          info.state = "live";
+          this.syncHeaderButtons();
+          new Notice(`Joined room: ${roomCode}`);
+        }
+      });
+
       log(`joinSession: connected to ${file.path} room=${roomCode}`);
     } catch (e) {
       warn(`joinSession failed: ${e}`);

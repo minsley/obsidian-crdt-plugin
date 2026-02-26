@@ -64,21 +64,28 @@ wss.on("connection", (conn) => {
     }
 
     switch (msg.type) {
-      case "subscribe":
-        (msg.topics as string[] || []).forEach((topic) => {
+      case "subscribe": {
+        if (!Array.isArray(msg.topics)) break;
+        const safeTops = msg.topics.filter((t: unknown): t is string => typeof t === "string");
+        safeTops.forEach((topic) => {
           subscribe(conn, topic);
           joined.add(topic);
         });
         break;
+      }
 
-      case "unsubscribe":
-        (msg.topics as string[] || []).forEach((topic) => {
+      case "unsubscribe": {
+        if (!Array.isArray(msg.topics)) break;
+        const safeTops = msg.topics.filter((t: unknown): t is string => typeof t === "string");
+        safeTops.forEach((topic) => {
           unsubscribe(conn, topic);
           joined.delete(topic);
         });
         break;
+      }
 
       case "publish": {
+        if (typeof msg.topic !== "string") break;
         const subs = topics.get(msg.topic);
         if (subs) {
           const out = JSON.stringify(msg);

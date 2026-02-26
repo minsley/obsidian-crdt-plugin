@@ -9,7 +9,14 @@ import * as Y from "yjs";
  * the markdown file (which carries the collab-id frontmatter UUID).
  */
 
+function validateUuid(uuid: string): void {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+    throw new Error(`Invalid UUID: ${uuid}`);
+  }
+}
+
 function yjsPath(app: App, uuid: string): string {
+  validateUuid(uuid);
   return `${app.vault.configDir}/plugins/obsidian-crdt-coeditor/yjs/${uuid}`;
 }
 
